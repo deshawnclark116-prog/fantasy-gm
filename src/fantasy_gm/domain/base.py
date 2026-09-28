@@ -12,10 +12,16 @@ from pydantic import BaseModel, ConfigDict
 class DomainModel(BaseModel):
     """Immutable, strict-by-default base for domain records.
 
-    ``frozen`` prevents attribute reassignment. Container fields (dicts/lists) inside a
-    frozen pydantic model are still mutable Python objects, so anything that must be
-    tamper-evident (e.g. the decision ledger) stores a serialized copy plus a content hash
-    rather than trusting in-memory object identity.
+    ``frozen`` prevents attribute *reassignment*, but a plain ``dict``/``list`` field would
+    still be mutable in place (``obj.field[k] = v``). Every dict-typed domain field is
+    therefore declared with ``fantasy_gm.domain.frozen.FrozenMapping`` (or, for opaque JSON
+    payloads, ``FrozenJsonObject``), which validates as a normal mapping but stores a deeply
+    immutable ``FrozenMap`` -- see ADR 0019. Sequence fields use ``tuple``, which is already
+    immutable.
+
+    Durable records (e.g. the decision ledger) additionally store a serialized copy plus a
+    content hash rather than trusting in-memory object identity, so tamper-evidence never
+    depends on any one process's object graph staying unmutated.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", validate_default=True)

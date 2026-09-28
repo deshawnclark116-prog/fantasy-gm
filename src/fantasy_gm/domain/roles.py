@@ -9,11 +9,14 @@ specific dimensions -- rather than a single usage metric or an aggregate intent 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping, FrozenSet
 from fantasy_gm.domain.ids import ObservationId, PlayerId
 from fantasy_gm.domain.nfl import Position, UsageMetric
 from fantasy_gm.domain.time import UtcDatetime
@@ -60,7 +63,7 @@ class RoleDimension(StrEnum):
 
 
 class RoleDimensionSpec(DomainModel):
-    positions: frozenset[Position]
+    positions: FrozenSet[Position]
     family: RoleFamily
     numerator: tuple[UsageMetric, ...] = ()
     denominator: tuple[UsageMetric, ...] = ()
@@ -87,7 +90,7 @@ def _s(
 
 D = RoleDimension
 F = RoleFamily
-ROLE_DIMENSIONS: dict[RoleDimension, RoleDimensionSpec] = {
+_ROLE_DIMENSIONS: dict[RoleDimension, RoleDimensionSpec] = {
     D.QB_DROPBACK_SHARE: _s(_QB, F.DEPLOYMENT, (M.DROPBACKS,), (M.TEAM_DROPBACKS,)),
     D.QB_DESIGNED_RUSH_SHARE: _s(_QB, F.RUSHING, (M.DESIGNED_RUSHES,), (M.TEAM_CARRIES,)),
     D.QB_SCRAMBLE_RATE: _s(_QB, F.RUSHING, (M.SCRAMBLES,), (M.DROPBACKS,)),
@@ -129,6 +132,10 @@ ROLE_DIMENSIONS: dict[RoleDimension, RoleDimensionSpec] = {
     D.REC_PERSONNEL_ROLE: _s(_REC, F.ALIGNMENT, supported=False),
 }
 
+# Module-level lookup table (not a pydantic field): wrapped so it cannot be mutated in place at
+# process scope, which would silently change every future component/role computation (ADR 0019).
+ROLE_DIMENSIONS: Mapping[RoleDimension, RoleDimensionSpec] = MappingProxyType(_ROLE_DIMENSIONS)
+
 
 def dimensions_for(position: Position) -> tuple[RoleDimension, ...]:
     return tuple(d for d, spec in ROLE_DIMENSIONS.items() if position in spec.positions)
@@ -159,7 +166,7 @@ class LatentRoleVector(DomainModel):
     player_id: PlayerId
     position: Position
     as_of: UtcDatetime
-    estimates: dict[RoleDimension, RoleEstimate]
+    estimates: FrozenMapping[RoleDimension, RoleEstimate]
 
     def value(self, dimension: RoleDimension) -> float | None:
         est = self.estimates.get(dimension)

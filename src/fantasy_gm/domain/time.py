@@ -13,6 +13,7 @@ from typing import Annotated
 from pydantic import AfterValidator, Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenSet
 
 
 def ensure_utc(value: datetime) -> datetime:
@@ -90,7 +91,10 @@ class TimestampPolicy(DomainModel):
     Ignored under SYSTEM_KNOWLEDGE, where our own ingestion clock bounds knowability.
     """
 
-    accepted: frozenset[TimestampQuality] = Field(default_factory=_default_accepted)
+    # FrozenSet (ADR 0019): a plain frozenset serialises in hash-seed-dependent, insertion
+    # history-dependent order, which silently breaks content-hash stability across a round
+    # trip; FrozenSet fixes canonical order without weakening what is actually validated.
+    accepted: FrozenSet[TimestampQuality] = Field(default_factory=_default_accepted)
     on_insufficient: InsufficientTimestampAction = InsufficientTimestampAction.EXCLUDE
 
 

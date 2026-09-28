@@ -53,6 +53,7 @@ def test_domain_is_pure() -> None:
                         "fantasy_gm.domain",
                         "__future__",
                         "pydantic",
+                        "pydantic_core",
                         "collections",
                         "datetime",
                         "enum",
@@ -64,5 +65,6 @@ def test_domain_is_pure() -> None:
                         "abc",
                         "threading",
                         "uuid",
+                        "types",
                     )
                 ), f"{path.name} imports {node.module}"

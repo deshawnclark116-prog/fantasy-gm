@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 
 from fantasy_gm.domain.artifacts import ModelArtifactManifest
@@ -20,7 +21,7 @@ def build_decision(
     decision_type: DecisionType,
     candidates: tuple[DecisionCandidate, ...],
     selected_candidate_id: CandidateId,
-    engine_versions: dict[str, str],
+    engine_versions: Mapping[str, str],
     decision_artifact: ModelArtifactManifest,
     regime: str,
     confidence: ConfidenceAssessment,

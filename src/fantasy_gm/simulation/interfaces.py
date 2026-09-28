@@ -6,6 +6,7 @@ run referenced by a decision can be reproduced exactly.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -16,6 +17,7 @@ from pydantic import Field
 from fantasy_gm.domain.actions import Action
 from fantasy_gm.domain.artifacts import RuntimeFingerprint
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping
 from fantasy_gm.domain.ids import CandidateId, FantasyTeamId, LeagueId, PlayerId
 from fantasy_gm.domain.league import DraftPick, League, LeagueRules
 from fantasy_gm.domain.seeds import SeedSpec
@@ -50,8 +52,13 @@ class WeeklyOutcomeRequest(DomainModel):
 
 @dataclass(frozen=True)
 class WeeklyOutcomeResult:
+    """``@dataclass(frozen=True)`` (not a ``DomainModel``: no pydantic validation is needed for
+    a pure simulator return value) only blocks attribute *reassignment*. ``samples`` is
+    constructed as a ``MappingProxyType`` by the simulator (ADR 0019) so the mapping itself
+    -- not only each array's own ``writeable=False`` flag -- is immutable too."""
+
     run: ReproducibilityEnvelope
-    samples: dict[PlayerId, NDArray[np.float64]]  # player -> (n_sims,) read-only array
+    samples: Mapping[PlayerId, NDArray[np.float64]]  # player -> (n_sims,) read-only array
 
 
 class WeeklyPlayerOutcomeSimulator(Protocol):
@@ -77,7 +84,7 @@ class MatchupResult(DomainModel):
     p_tie: float
     home_points_mean: float
     away_points_mean: float
-    margin_quantiles: dict[float, float]  # home - away
+    margin_quantiles: FrozenMapping[float, float]  # home - away
 
 
 class MatchupSimulator(Protocol):
@@ -108,16 +115,16 @@ class RemainingSeasonRequest(DomainModel):
     standings: tuple[TeamRecord, ...]
     remaining_schedule: tuple[ScheduledMatchup, ...]
     # team -> week -> lineup distributions (lineup choice is an upstream decision).
-    lineups: dict[FantasyTeamId, dict[int, tuple[PlayerWeekDistribution, ...]]]
+    lineups: FrozenMapping[FantasyTeamId, FrozenMapping[int, tuple[PlayerWeekDistribution, ...]]]
     n_sims: int = Field(ge=1)
     seed: SeedSpec
 
 
 class RemainingSeasonResult(DomainModel):
     run: ReproducibilityEnvelope
-    p_playoffs: dict[FantasyTeamId, float]
-    p_championship: dict[FantasyTeamId, float]
-    expected_wins: dict[FantasyTeamId, float]
+    p_playoffs: FrozenMapping[FantasyTeamId, float]
+    p_championship: FrozenMapping[FantasyTeamId, float]
+    expected_wins: FrozenMapping[FantasyTeamId, float]
 
 
 class RemainingSeasonSimulator(Protocol):
@@ -148,8 +155,8 @@ class DraftContinuationRequest(DomainModel):
 class DraftContinuationResult(DomainModel):
     run: ReproducibilityEnvelope
     # candidate -> quantiles of the finished-roster objective (e.g. championship equity)
-    candidate_objective_quantiles: dict[CandidateId, dict[float, float]]
-    candidate_objective_mean: dict[CandidateId, float]
+    candidate_objective_quantiles: FrozenMapping[CandidateId, FrozenMapping[float, float]]
+    candidate_objective_mean: FrozenMapping[CandidateId, float]
 
 
 class DraftContinuationSimulator(Protocol):

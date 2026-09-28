@@ -14,8 +14,10 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -123,48 +125,56 @@ class LedgerTimePolicy(DomainModel):
 
 
 S = DecisionStatus
-TRANSITIONS: dict[DecisionStatus, frozenset[DecisionStatus]] = {
-    S.RECORDED: frozenset(),
-    S.RECOMMENDED: frozenset({S.EXECUTED, S.REJECTED, S.EXPIRED, S.SUPERSEDED}),
-    S.AWAITING_APPROVAL: frozenset({S.APPROVED, S.REJECTED, S.EXPIRED, S.SUPERSEDED}),
-    S.APPROVED: frozenset(
-        {
-            S.EXECUTED,
-            S.EXECUTION_FAILED,
-            S.EXECUTION_BLOCKED,
-            S.EXECUTION_UNCERTAIN,
-            S.EXPIRED,
-            S.SUPERSEDED,
-        }
-    ),
-    S.EXECUTION_FAILED: frozenset(
-        {
-            S.EXECUTED,
-            S.EXECUTION_FAILED,
-            S.EXECUTION_BLOCKED,
-            S.EXECUTION_UNCERTAIN,
-            S.EXPIRED,
-            S.SUPERSEDED,
-        }
-    ),
-    # An uncertain execution can only be resolved by reconciliation: it can never simply expire
-    # or be superseded, because the action may already have happened.
-    S.EXECUTION_UNCERTAIN: frozenset({S.EXECUTED, S.EXECUTION_FAILED, S.EXECUTION_UNCERTAIN}),
-    S.EXECUTION_BLOCKED: frozenset({S.EXECUTED, S.EXPIRED, S.SUPERSEDED}),
-    S.REJECTED: frozenset(),
-    S.EXECUTED: frozenset(),
-    S.EXPIRED: frozenset(),
-    S.SUPERSEDED: frozenset(),
-}
+# Module-level state-machine tables, not pydantic fields. Wrapped in MappingProxyType so they
+# cannot be mutated in place at process scope -- a mutation here would silently change which
+# ledger transitions are legal for every decision, process-wide (ADR 0019). The individual
+# frozensets were already immutable.
+TRANSITIONS: Mapping[DecisionStatus, frozenset[DecisionStatus]] = MappingProxyType(
+    {
+        S.RECORDED: frozenset(),
+        S.RECOMMENDED: frozenset({S.EXECUTED, S.REJECTED, S.EXPIRED, S.SUPERSEDED}),
+        S.AWAITING_APPROVAL: frozenset({S.APPROVED, S.REJECTED, S.EXPIRED, S.SUPERSEDED}),
+        S.APPROVED: frozenset(
+            {
+                S.EXECUTED,
+                S.EXECUTION_FAILED,
+                S.EXECUTION_BLOCKED,
+                S.EXECUTION_UNCERTAIN,
+                S.EXPIRED,
+                S.SUPERSEDED,
+            }
+        ),
+        S.EXECUTION_FAILED: frozenset(
+            {
+                S.EXECUTED,
+                S.EXECUTION_FAILED,
+                S.EXECUTION_BLOCKED,
+                S.EXECUTION_UNCERTAIN,
+                S.EXPIRED,
+                S.SUPERSEDED,
+            }
+        ),
+        # An uncertain execution can only be resolved by reconciliation: it can never simply
+        # expire or be superseded, because the action may already have happened.
+        S.EXECUTION_UNCERTAIN: frozenset({S.EXECUTED, S.EXECUTION_FAILED, S.EXECUTION_UNCERTAIN}),
+        S.EXECUTION_BLOCKED: frozenset({S.EXECUTED, S.EXPIRED, S.SUPERSEDED}),
+        S.REJECTED: frozenset(),
+        S.EXECUTED: frozenset(),
+        S.EXPIRED: frozenset(),
+        S.SUPERSEDED: frozenset(),
+    }
+)
 
-INITIAL_STATUSES: dict[AutonomyMode, frozenset[DecisionStatus]] = {
-    AutonomyMode.OBSERVE: frozenset({S.RECORDED}),
-    AutonomyMode.RECOMMEND: frozenset({S.RECOMMENDED, S.RECORDED}),
-    AutonomyMode.APPROVAL_REQUIRED: frozenset({S.AWAITING_APPROVAL, S.RECOMMENDED, S.RECORDED}),
-    AutonomyMode.AUTONOMOUS: frozenset(
-        {S.APPROVED, S.AWAITING_APPROVAL, S.RECOMMENDED, S.RECORDED}
-    ),
-}
+INITIAL_STATUSES: Mapping[AutonomyMode, frozenset[DecisionStatus]] = MappingProxyType(
+    {
+        AutonomyMode.OBSERVE: frozenset({S.RECORDED}),
+        AutonomyMode.RECOMMEND: frozenset({S.RECOMMENDED, S.RECORDED}),
+        AutonomyMode.APPROVAL_REQUIRED: frozenset({S.AWAITING_APPROVAL, S.RECOMMENDED, S.RECORDED}),
+        AutonomyMode.AUTONOMOUS: frozenset(
+            {S.APPROVED, S.AWAITING_APPROVAL, S.RECOMMENDED, S.RECORDED}
+        ),
+    }
+)
 
 EXECUTABLE_STATUSES = frozenset({S.APPROVED, S.EXECUTION_FAILED, S.EXECUTION_UNCERTAIN})
 

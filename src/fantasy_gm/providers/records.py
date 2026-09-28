@@ -13,6 +13,7 @@ from decimal import Decimal
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenJsonObject, FrozenMapping, FrozenSet
 from fantasy_gm.domain.identity import ProviderRef
 from fantasy_gm.domain.league import StatKey
 from fantasy_gm.domain.nfl import (
@@ -42,7 +43,7 @@ class ProviderRecord(DomainModel):
 class ProviderPlayerRecord(ProviderRecord):
     player_ref: ProviderRef
     full_name: str
-    positions: frozenset[Position]
+    positions: FrozenSet[Position]
     birth_date: date | None = None
     team_ref: ProviderRef | None = None
     roster_status: RosterStatus | None = None
@@ -70,7 +71,7 @@ class ProviderUsageRecord(ProviderRecord):
     season: int
     week: int
     phase: SeasonPhase
-    metrics: dict[UsageMetric, float]
+    metrics: FrozenMapping[UsageMetric, float]
 
 
 class ProviderInjuryRecord(ProviderRecord):
@@ -85,7 +86,7 @@ class ProviderInjuryRecord(ProviderRecord):
 class ProviderStatLine(ProviderRecord):
     player_ref: ProviderRef
     game_ref: ProviderRef
-    stats: dict[StatKey, Decimal]
+    stats: FrozenMapping[StatKey, Decimal]
 
 
 class ProviderADPRecord(ProviderRecord):
@@ -101,7 +102,7 @@ class ProviderLeagueSnapshot(ProviderRecord):
     for translating into ``fantasy_gm.domain.league`` types."""
 
     league_ref: ProviderRef
-    raw: dict[str, object]
+    raw: FrozenJsonObject  # arbitrary nested provider JSON, deep-frozen (ADR 0019)
 
 
 class ProviderFantasyTransaction(ProviderRecord):

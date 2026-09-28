@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Self
 
 from pydantic import Field, model_validator
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping
 from fantasy_gm.domain.identity import ProviderName
 from fantasy_gm.domain.ids import NFLTeamId, ObservationId, PlayerId, SnapshotId, new_snapshot_id
 from fantasy_gm.domain.nfl import Position
@@ -33,30 +36,36 @@ class ComponentCategory(StrEnum):
     CONTEXT = "context"  # modifies trust in other components; not itself a commitment level
 
 
-COMPONENT_CATEGORY: dict[IntentComponent, ComponentCategory] = {
-    IntentComponent.DRAFT_INVESTMENT: ComponentCategory.PRIOR,
-    IntentComponent.CONTRACT_INVESTMENT: ComponentCategory.PRIOR,
-    IntentComponent.ROSTER_COMPETITION: ComponentCategory.PRIOR,
-    IntentComponent.RECENT_TRANSACTIONS: ComponentCategory.PRIOR,
-    IntentComponent.DEPTH_CHART: ComponentCategory.PRIOR,
-    IntentComponent.PRESEASON_DEPLOYMENT: ComponentCategory.PRIOR,
-    IntentComponent.COACHING_CONTINUITY: ComponentCategory.CONTEXT,
-    IntentComponent.ACTUAL_USAGE: ComponentCategory.EVIDENCE,
-}
+# Module-level lookup tables, not pydantic fields; wrapped so they cannot be mutated in place
+# at process scope, which would silently change every future snapshot computed (ADR 0019).
+COMPONENT_CATEGORY: Mapping[IntentComponent, ComponentCategory] = MappingProxyType(
+    {
+        IntentComponent.DRAFT_INVESTMENT: ComponentCategory.PRIOR,
+        IntentComponent.CONTRACT_INVESTMENT: ComponentCategory.PRIOR,
+        IntentComponent.ROSTER_COMPETITION: ComponentCategory.PRIOR,
+        IntentComponent.RECENT_TRANSACTIONS: ComponentCategory.PRIOR,
+        IntentComponent.DEPTH_CHART: ComponentCategory.PRIOR,
+        IntentComponent.PRESEASON_DEPLOYMENT: ComponentCategory.PRIOR,
+        IntentComponent.COACHING_CONTINUITY: ComponentCategory.CONTEXT,
+        IntentComponent.ACTUAL_USAGE: ComponentCategory.EVIDENCE,
+    }
+)
 
 
 # Which latent-role families each component is evidence about. Future role models consume
 # components as priors/covariates on exactly these dimensions -- never as one intent score.
-COMPONENT_INFORMS: dict[IntentComponent, tuple[RoleFamily, ...]] = {
-    IntentComponent.DRAFT_INVESTMENT: (RoleFamily.DEPLOYMENT, RoleFamily.TARGET_EARNING),
-    IntentComponent.CONTRACT_INVESTMENT: (RoleFamily.DEPLOYMENT,),
-    IntentComponent.ROSTER_COMPETITION: (RoleFamily.DEPLOYMENT,),
-    IntentComponent.RECENT_TRANSACTIONS: (RoleFamily.DEPLOYMENT,),
-    IntentComponent.DEPTH_CHART: (RoleFamily.DEPLOYMENT,),
-    IntentComponent.COACHING_CONTINUITY: (RoleFamily.ENVIRONMENT,),
-    IntentComponent.PRESEASON_DEPLOYMENT: (RoleFamily.DEPLOYMENT,),
-    IntentComponent.ACTUAL_USAGE: (RoleFamily.DEPLOYMENT,),
-}
+COMPONENT_INFORMS: Mapping[IntentComponent, tuple[RoleFamily, ...]] = MappingProxyType(
+    {
+        IntentComponent.DRAFT_INVESTMENT: (RoleFamily.DEPLOYMENT, RoleFamily.TARGET_EARNING),
+        IntentComponent.CONTRACT_INVESTMENT: (RoleFamily.DEPLOYMENT,),
+        IntentComponent.ROSTER_COMPETITION: (RoleFamily.DEPLOYMENT,),
+        IntentComponent.RECENT_TRANSACTIONS: (RoleFamily.DEPLOYMENT,),
+        IntentComponent.DEPTH_CHART: (RoleFamily.DEPLOYMENT,),
+        IntentComponent.COACHING_CONTINUITY: (RoleFamily.ENVIRONMENT,),
+        IntentComponent.PRESEASON_DEPLOYMENT: (RoleFamily.DEPLOYMENT,),
+        IntentComponent.ACTUAL_USAGE: (RoleFamily.DEPLOYMENT,),
+    }
+)
 
 
 def informed_dimensions(
@@ -95,7 +104,7 @@ class ComponentSignal(DomainModel):
     influence: float = Field(default=0.0, ge=0.0, le=1.0)
     method: str
     informs: tuple[RoleDimension, ...] = ()
-    measurements: dict[str, float] = Field(default_factory=dict)
+    measurements: FrozenMapping[str, float] = Field(default_factory=dict)
     provenance: tuple[ProvenanceRecord, ...] = ()
     notes: tuple[str, ...] = ()
 

@@ -6,11 +6,13 @@ execution. Decisions optimise **league-specific expected championship equity** f
 **raw NFL data**, with explicit uncertainty, and every decision is recorded so it can be graded
 honestly later.
 
-> Status: **Foundation v0.1.1** (auditability, temporal integrity and execution safety).
+> Status: **Foundation v0.1.2** (deep immutability / evidence-integrity closeout).
 > What exists:
 > * the canonical domain, a leak-safe observation store and knowledge sessions;
 > * Organizational Intent v0, the versioned immutable ledger and a fail-closed autonomy gate;
-> * idempotent, crash-safe execution attempts and seedable simulation interfaces.
+> * idempotent, crash-safe execution attempts and seedable simulation interfaces;
+> * deeply immutable evidence and decision-input values (`FrozenMapping`/`FrozenSet`, ADR 0019) --
+>   a value admitted into a `KnowledgeSession` cannot be mutated in memory afterwards.
 >
 > There is **no projection model, no real provider integration, no candidate generation or
 > optimiser, no UI and no full simulator yet**. Those need an architecture review first.
@@ -68,6 +70,7 @@ Bold = exists in v0.1 (at least as a contract):
 ```
 src/fantasy_gm/
   domain/                 pure data + invariants, no IO
+    frozen.py              FrozenMapping/FrozenSet/FrozenJsonObject: deep immutability (ADR 0019)
     time.py clock.py      UTC timestamps, KnowledgeCutoff, TimestampQuality, injected clocks
     run_context.py        LIVE / PAPER / REPLAY
     observation.py        bitemporal Observation base + SourceRef (timestamp trust, raw ts)
@@ -96,9 +99,9 @@ src/fantasy_gm/
   api/                    FastAPI app (health + read-only ledger)
   runtime.py              runtime/build fingerprint
 alembic/                  migrations (append-only triggers incl. TRUNCATE on PostgreSQL)
-docs/adr/                 architecture decision records 0001-0018
+docs/adr/                 architecture decision records 0001-0019
 docs/REVIEW_NOTES.md      weaknesses & open questions for architecture review
-tests/acceptance/         v0.1 criteria + v0.1.1 criteria (one class per review item)
+tests/acceptance/         v0.1 / v0.1.1 / v0.1.2 criteria (one class per review item)
 tests/fixtures/records/   golden v1 payloads that must stay readable forever
 ```
 
@@ -132,5 +135,9 @@ tests/fixtures/records/   golden v1 payloads that must stay readable forever
 9. **Roles are multidimensional.** Deployment is separate from target earning. There is no
    aggregate organizational-intent score.
 10. **Reproducibility envelope** on every simulation, with `uv.lock` pinning dependencies.
+11. **Evidence values are deeply immutable.** Dict-typed fields are `FrozenMapping`/
+    `FrozenJsonObject`; `frozenset` fields serialise in a canonical sorted order. A value read
+    through a `KnowledgeSession` and hashed into the evidence manifest cannot be mutated in
+    memory afterwards, at any nesting depth (ADR 0019).
 
 See `docs/adr/` for rationale and `docs/REVIEW_NOTES.md` for known weaknesses.

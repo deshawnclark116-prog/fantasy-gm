@@ -137,10 +137,15 @@ def test_in_memory_tamper_detection(clock: ManualClock) -> None:
 
 
 def test_returned_objects_cannot_rewrite_history(clock: ManualClock) -> None:
+    """``engine_versions`` is a deeply frozen ``FrozenMapping`` (ADR 0019): a returned decision's
+    nested container cannot be mutated in place at all, so it can never drift from what the
+    ledger has stored -- there is no window in which a mutation "doesn't stick"."""
     ledger = InMemoryDecisionLedger(clock)
     d = lineup_decision(open_session(memory_store(), clock, ts(days=6)))
     ledger.record(d, status_event(d, DecisionStatus.RECORDED))
-    ledger.get(d.decision_id).decision.value.engine_versions["decision_engine"] = "rewritten"
+    returned = ledger.get(d.decision_id).decision.value
+    with pytest.raises(TypeError):
+        returned.engine_versions["decision_engine"] = "rewritten"  # type: ignore[index]
     assert ledger.get(d.decision_id).decision.value.engine_versions["decision_engine"] == (
         "test_fixture_v0"
     )

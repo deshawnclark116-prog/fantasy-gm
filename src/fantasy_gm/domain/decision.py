@@ -13,8 +13,10 @@ Three times are kept deliberately distinct:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from itertools import pairwise
+from types import MappingProxyType
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
@@ -32,6 +34,7 @@ from fantasy_gm.domain.actions import (
 from fantasy_gm.domain.autonomy import AutonomyMode, DecisionType
 from fantasy_gm.domain.base import DomainModel
 from fantasy_gm.domain.evidence import EvidenceKind, EvidenceManifest
+from fantasy_gm.domain.frozen import FrozenMap, FrozenMapping
 from fantasy_gm.domain.identity import ProviderName
 from fantasy_gm.domain.ids import (
     CandidateId,
@@ -53,15 +56,20 @@ from fantasy_gm.domain.run_context import RunContext
 from fantasy_gm.domain.seeds import SeedSpec
 from fantasy_gm.domain.time import UtcDatetime
 
-_ALLOWED_ACTIONS: dict[DecisionType, tuple[type[DomainModel], ...]] = {
-    DecisionType.DRAFT_PICK: (DraftSelection,),
-    DecisionType.LINEUP: (SetLineup, NoAction),
-    DecisionType.WAIVER_CLAIM: (WaiverClaim, NoAction),
-    DecisionType.FREE_AGENT_ADD: (FreeAgentAddDrop, NoAction),
-    DecisionType.DROP: (FreeAgentAddDrop, NoAction),
-    DecisionType.TRADE_PROPOSAL: (ProposeTrade, NoAction),
-    DecisionType.TRADE_RESPONSE: (RespondToTrade,),
-}
+# Module-level lookup table, not a pydantic field; wrapped so it cannot be mutated in place at
+# process scope (ADR 0019 -- the audit covers shallowly frozen containers generally, not only
+# pydantic model fields).
+_ALLOWED_ACTIONS: Mapping[DecisionType, tuple[type[DomainModel], ...]] = MappingProxyType(
+    {
+        DecisionType.DRAFT_PICK: (DraftSelection,),
+        DecisionType.LINEUP: (SetLineup, NoAction),
+        DecisionType.WAIVER_CLAIM: (WaiverClaim, NoAction),
+        DecisionType.FREE_AGENT_ADD: (FreeAgentAddDrop, NoAction),
+        DecisionType.DROP: (FreeAgentAddDrop, NoAction),
+        DecisionType.TRADE_PROPOSAL: (ProposeTrade, NoAction),
+        DecisionType.TRADE_RESPONSE: (RespondToTrade,),
+    }
+)
 
 
 class OutcomeDistribution(DomainModel):
@@ -71,14 +79,14 @@ class OutcomeDistribution(DomainModel):
     unit: str = Field(min_length=1)
     mean: float
     stdev: float | None = Field(default=None, ge=0.0)
-    quantiles: dict[float, float] = Field(default_factory=dict)
+    quantiles: FrozenMapping[float, float] = Field(default_factory=dict)
     n_samples: int | None = Field(default=None, ge=1)
     method: str = Field(min_length=1)
     higher_is_better: bool = True
 
     @field_validator("quantiles")
     @classmethod
-    def _monotone(cls, value: dict[float, float]) -> dict[float, float]:
+    def _monotone(cls, value: Mapping[float, float]) -> Mapping[float, float]:
         ordered = sorted(value.items())
         for prob, _ in ordered:
             if not 0.0 < prob < 1.0:
@@ -86,7 +94,11 @@ class OutcomeDistribution(DomainModel):
         for (_, lo), (_, hi) in pairwise(ordered):
             if hi < lo:
                 raise ValueError("quantile values must be non-decreasing")
-        return dict(ordered)
+        # Re-wrap in canonical (sorted) order: a plain `dict(ordered)` here would silently
+        # replace the FrozenMapping that the Annotated schema already produced, undoing the
+        # freeze (a field_validator's return value becomes the final field value, bypassing
+        # no further freezing). FrozenMap keeps this value immutable end to end.
+        return FrozenMap(dict(ordered))
 
 
 class ConfidenceAssessment(DomainModel):
@@ -115,7 +127,7 @@ class Decision(DomainModel):
     information_cutoff: UtcDatetime
     candidates: tuple[DecisionCandidate, ...] = Field(min_length=1)
     selected_candidate_id: CandidateId
-    engine_versions: dict[str, str] = Field(min_length=1)
+    engine_versions: FrozenMapping[str, str] = Field(min_length=1)
     # Artifact (model/heuristic) that produced the decision; it must appear in the manifest and
     # is what validation state is checked against before any autonomous execution.
     decision_artifact_hash: str
@@ -233,10 +245,10 @@ class ObservedOutcome(DomainModel):
     outcome_id: OutcomeId = Field(default_factory=new_outcome_id)
     decision_id: DecisionId
     known_at: UtcDatetime  # when these facts became knowable
-    realized: dict[str, float] = Field(min_length=1)
+    realized: FrozenMapping[str, float] = Field(min_length=1)
     # Realised values of the same metric for non-selected candidates, only where directly
     # observable (e.g. points a benched player actually scored). Absent = unknown, not zero.
-    observed_alternatives: dict[CandidateId, float] = Field(default_factory=dict)
+    observed_alternatives: FrozenMapping[CandidateId, float] = Field(default_factory=dict)
     source_refs: tuple[str, ...] = ()
     notes: str = ""
 
@@ -296,5 +308,5 @@ class CounterfactualEvaluation(DomainModel):
     metric: str
     decision_hash: str
     selected_realized: float  # observed
-    counterfactual_means: dict[CandidateId, float]  # model-based
+    counterfactual_means: FrozenMapping[CandidateId, float]  # model-based
     estimated_regret: float  # model-based: best counterfactual mean - observed selected

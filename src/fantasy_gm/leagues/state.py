@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping
 from fantasy_gm.domain.ids import FantasyTeamId, ObservationId, PlayerId
 from fantasy_gm.domain.knowledge import of_type
 from fantasy_gm.domain.league import (
@@ -43,9 +44,9 @@ class LeagueState(DomainModel):
     waivers: WaiverSettings | None = None
     season_settings: SeasonSettings | None = None
     draft: DraftSettings | None = None
-    rosters: dict[FantasyTeamId, FantasyRoster] = Field(default_factory=dict)
-    waiver_budgets: dict[FantasyTeamId, WaiverBudgetState] = Field(default_factory=dict)
-    eligibility: dict[PlayerId, frozenset[Position]] = Field(default_factory=dict)
+    rosters: FrozenMapping[FantasyTeamId, FantasyRoster] = Field(default_factory=dict)
+    waiver_budgets: FrozenMapping[FantasyTeamId, WaiverBudgetState] = Field(default_factory=dict)
+    eligibility: FrozenMapping[PlayerId, frozenset[Position]] = Field(default_factory=dict)
     draft_board: DraftBoardState | None = None
     source_observation_ids: tuple[ObservationId, ...] = ()
     gaps: tuple[str, ...] = ()

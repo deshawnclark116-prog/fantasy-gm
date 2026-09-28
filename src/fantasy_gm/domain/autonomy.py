@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping
 from fantasy_gm.domain.ids import LeagueId
 from fantasy_gm.domain.risk import RiskPolicy
 
@@ -51,7 +52,7 @@ class FreshnessContext(DomainModel):
 class FreshnessPolicy(DomainModel):
     """Maximum age of a decision's information (now - information_cutoff) at execution."""
 
-    max_age: dict[DecisionType, timedelta] = Field(default_factory=_default_max_age)
+    max_age: FrozenMapping[DecisionType, timedelta] = Field(default_factory=_default_max_age)
     live_draft_max_age: timedelta = timedelta(seconds=30)
     near_lock_window_minutes: float = Field(default=90.0, ge=0)
     near_lock_max_age: timedelta = timedelta(minutes=5)
@@ -76,7 +77,7 @@ class FreshnessPolicy(DomainModel):
 class AutonomyPolicy(DomainModel):
     league_id: LeagueId
     default_mode: AutonomyMode = AutonomyMode.RECOMMEND
-    mode_overrides: dict[DecisionType, AutonomyMode] = Field(default_factory=dict)
+    mode_overrides: FrozenMapping[DecisionType, AutonomyMode] = Field(default_factory=dict)
     freshness: FreshnessPolicy = Field(default_factory=FreshnessPolicy)
     risk: RiskPolicy = Field(default_factory=RiskPolicy)
 

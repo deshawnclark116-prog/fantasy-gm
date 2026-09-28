@@ -14,6 +14,7 @@ from typing import ClassVar, Self
 from pydantic import Field, model_validator
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping, FrozenSet
 from fantasy_gm.domain.ids import FantasyTeamId, LeagueId, PlayerId
 from fantasy_gm.domain.nfl import Position
 from fantasy_gm.domain.observation import Observation
@@ -68,7 +69,7 @@ class ThresholdBonus(DomainModel):
     stat: StatKey
     threshold: Decimal
     points: Decimal
-    positions: frozenset[Position] | None = None
+    positions: FrozenSet[Position] | None = None
 
 
 class AllowedTier(DomainModel):
@@ -100,8 +101,12 @@ def _validate_tiers(tiers: tuple[AllowedTier, ...], label: str) -> None:
 
 class ScoringRules(DomainModel):
     name: str
-    per_stat: dict[StatKey, Decimal]
-    position_overrides: dict[Position, dict[StatKey, Decimal]] = Field(default_factory=dict)
+    # FrozenMapping (ADR 0019): scoring tables are league-state evidence handed to decision
+    # engines, and must not be mutable in place after being read and hashed.
+    per_stat: FrozenMapping[StatKey, Decimal]
+    position_overrides: FrozenMapping[Position, FrozenMapping[StatKey, Decimal]] = Field(
+        default_factory=dict
+    )
     bonuses: tuple[ThresholdBonus, ...] = ()
     dst_points_allowed_tiers: tuple[AllowedTier, ...] = ()
     dst_yards_allowed_tiers: tuple[AllowedTier, ...] = ()
@@ -121,8 +126,8 @@ class ScoringRules(DomainModel):
         return self
 
     def rate(self, stat: StatKey, position: Position) -> Decimal:
-        override = self.position_overrides.get(position, {})
-        if stat in override:
+        override = self.position_overrides.get(position)
+        if override is not None and stat in override:
             return override[stat]
         return self.per_stat.get(stat, Decimal(0))
 
@@ -146,7 +151,7 @@ class RosterSlot(DomainModel):
     label: str = Field(min_length=1, max_length=32)
     kind: SlotKind
     count: int = Field(ge=1)
-    eligible_positions: frozenset[Position] = frozenset()
+    eligible_positions: FrozenSet[Position] = frozenset()
 
     @model_validator(mode="after")
     def _starter_needs_positions(self) -> Self:
@@ -157,7 +162,7 @@ class RosterSlot(DomainModel):
 
 class RosterRules(DomainModel):
     slots: tuple[RosterSlot, ...] = Field(min_length=1)
-    max_per_position: dict[Position, int] = Field(default_factory=dict)
+    max_per_position: FrozenMapping[Position, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _unique_labels(self) -> Self:
@@ -338,7 +343,7 @@ class PlatformEligibility(_LeagueObservation):
 
     kind: ClassVar[str] = "platform_eligibility"
     player_id: PlayerId
-    positions: frozenset[Position] = Field(min_length=1)
+    positions: FrozenSet[Position] = Field(min_length=1)
 
     def fact_key(self) -> str:
         return f"eligibility:{self.league_id}:{self.player_id}:{self.effective_at.isoformat()}"

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 from pydantic import Field
 
@@ -17,6 +19,7 @@ from fantasy_gm.domain.actions import (
     WaiverClaim,
 )
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenSet
 from fantasy_gm.domain.ids import PlayerId
 
 
@@ -31,12 +34,14 @@ class ActionRiskClass(StrEnum):
         return _RANK[self]
 
 
-_RANK = {
-    ActionRiskClass.LOW: 0,
-    ActionRiskClass.MEDIUM: 1,
-    ActionRiskClass.HIGH: 2,
-    ActionRiskClass.CRITICAL: 3,
-}
+_RANK: Mapping[ActionRiskClass, int] = MappingProxyType(
+    {
+        ActionRiskClass.LOW: 0,
+        ActionRiskClass.MEDIUM: 1,
+        ActionRiskClass.HIGH: 2,
+        ActionRiskClass.CRITICAL: 3,
+    }
+)
 
 
 def riskiest(*classes: ActionRiskClass) -> ActionRiskClass:
@@ -52,7 +57,7 @@ class RiskPolicy(DomainModel):
     waiver_base_class: ActionRiskClass = ActionRiskClass.MEDIUM
     faab_high_fraction: float = Field(default=0.20, ge=0, le=1)  # bid share of budget -> HIGH
     faab_critical_fraction: float = Field(default=0.40, ge=0, le=1)  # -> CRITICAL
-    protected_player_ids: frozenset[PlayerId] = frozenset()
+    protected_player_ids: FrozenSet[PlayerId] = frozenset()
     protected_drop_class: ActionRiskClass = ActionRiskClass.HIGH
     trade_proposal_class: ActionRiskClass = ActionRiskClass.HIGH
     trade_accept_class: ActionRiskClass = ActionRiskClass.CRITICAL

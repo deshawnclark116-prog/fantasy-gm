@@ -8,6 +8,9 @@ distinguishable in the ledger. These are CPU-bound: call them from async code on
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -31,16 +34,16 @@ _NO_CONFIG_HASH = sha256_hex("{}")  # reference simulators have no tunable confi
 
 def _sample_players(
     lineup: tuple[PlayerWeekDistribution, ...], n: int, seed: SeedSpec
-) -> dict[PlayerId, NDArray[np.float64]]:
+) -> Mapping[PlayerId, NDArray[np.float64]]:
     out: dict[PlayerId, NDArray[np.float64]] = {}
     for dist in lineup:
         # One stream per player-week: adding/removing another player never changes this draw
         # (common random numbers across candidate lineups).
         rng = generator_for(seed.child("player", dist.player_id, str(dist.season), str(dist.week)))
         arr = dist.sample(rng, n)
-        arr.setflags(write=False)
+        arr.setflags(write=False)  # the array's own contents are read-only ...
         out[dist.player_id] = arr
-    return out
+    return MappingProxyType(out)  # ... and so is the mapping itself (ADR 0019)
 
 
 def _artifacts(*lineups: tuple[PlayerWeekDistribution, ...]) -> tuple[str, ...]:

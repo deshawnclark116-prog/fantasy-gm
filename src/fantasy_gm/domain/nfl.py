@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from enum import StrEnum
 from typing import ClassVar, Self
@@ -9,6 +10,7 @@ from typing import ClassVar, Self
 from pydantic import Field, field_validator, model_validator
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping, FrozenSet
 from fantasy_gm.domain.ids import CoachId, GameId, NFLTeamId, PlayerId
 from fantasy_gm.domain.observation import Observation
 
@@ -43,7 +45,7 @@ class Player(DomainModel):
 
     player_id: PlayerId
     full_name: str = Field(min_length=1)
-    positions: frozenset[Position] = Field(min_length=1)
+    positions: FrozenSet[Position] = Field(min_length=1)
     birth_date: date | None = None
 
     @property
@@ -259,15 +261,18 @@ class UsageSnapshot(Observation):
     season: int
     week: int = Field(ge=0, le=25)
     phase: SeasonPhase
-    metrics: dict[UsageMetric, float]
+    # Deeply immutable: the outer mapping is frozen by construction (ADR 0019), so an engine
+    # that reads this observation through a KnowledgeSession cannot mutate it after its
+    # evidence hash has been sealed into the manifest.
+    metrics: FrozenMapping[UsageMetric, float]
 
     @field_validator("metrics")
     @classmethod
-    def _non_negative(cls, value: dict[UsageMetric, float]) -> dict[UsageMetric, float]:
+    def _non_negative(cls, value: Mapping[UsageMetric, float]) -> Mapping[UsageMetric, float]:
         for metric, amount in value.items():
             if amount < 0:
                 raise ValueError(f"usage metric {metric} cannot be negative")
-        return value
+        return value  # already frozen by the FrozenMapping annotation; returned unchanged
 
     def share(self, numerator: UsageMetric, denominator: UsageMetric) -> float | None:
         """Ratio of two observed metrics, or None if either is unobserved / denominator is 0."""

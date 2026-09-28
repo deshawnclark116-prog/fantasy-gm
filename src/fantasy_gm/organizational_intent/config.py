@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.frozen import FrozenMapping
 from fantasy_gm.domain.nfl import ContextSourceKind, DepthChartSource, Position
 from fantasy_gm.domain.roles import RoleDimension
 
@@ -77,7 +78,7 @@ class IntentConfigV0(DomainModel):
     contract_confidence: float = Field(default=0.7, ge=0, le=1)
 
     # Roster competition
-    competition_primary_roles: dict[Position, int] = Field(default_factory=_primary_roles)
+    competition_primary_roles: FrozenMapping[Position, int] = Field(default_factory=_primary_roles)
     competition_base_confidence: float = Field(default=0.6, ge=0, le=1)
 
     # Recent roster transactions
@@ -85,7 +86,7 @@ class IntentConfigV0(DomainModel):
     transaction_confidence: float = Field(default=0.5, ge=0, le=1)
 
     # Depth chart
-    depth_source_reliability: dict[DepthChartSource, float] = Field(
+    depth_source_reliability: FrozenMapping[DepthChartSource, float] = Field(
         default_factory=_depth_reliability
     )
     depth_staleness_half_life_days: float = Field(default=21.0, gt=0)
@@ -97,7 +98,7 @@ class IntentConfigV0(DomainModel):
     # Preseason deployment
     preseason_first_team_confidence: float = Field(default=0.6, ge=0, le=1)
     preseason_full_confidence_games: int = Field(default=3, ge=1)
-    preseason_context_reliability: dict[ContextSourceKind, float] = Field(
+    preseason_context_reliability: FrozenMapping[ContextSourceKind, float] = Field(
         default_factory=_context_reliability
     )
     preseason_unknown_context_factor: float = Field(default=0.5, ge=0, le=1)
@@ -108,10 +109,10 @@ class IntentConfigV0(DomainModel):
     usage_recency_half_life_games: float = Field(default=4.0, gt=0)
     usage_prior_season_discount: float = Field(default=0.5, ge=0, le=1)
     usage_fallback_quality: float = Field(default=0.6, ge=0, le=1)
-    usage_deployment_dimensions: dict[Position, tuple[RoleDimension, ...]] = Field(
+    usage_deployment_dimensions: FrozenMapping[Position, tuple[RoleDimension, ...]] = Field(
         default_factory=_deployment_dimensions
     )
-    usage_full_role_reference: dict[Position, dict[RoleDimension, float]] = Field(
+    usage_full_role_reference: FrozenMapping[Position, FrozenMapping[RoleDimension, float]] = Field(
         default_factory=_full_role_reference
     )
 
