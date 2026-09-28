@@ -1,6 +1,6 @@
 # ADR 0005 — Organizational Intent v0: components, not a score
 
-**Status:** accepted (v0; expected to change after validation)
+**Status:** accepted; amended by ADR 0018 (role dimensions, conditional preseason).
 
 ## Decision
 * The snapshot contains one `ComponentSignal` per component: draft investment, contract

@@ -1,0 +1,6 @@
+{
+  "payload": "{\"basis\":\"observed\",\"decision_id\":\"dec_f699d735697a4d8aab3afb4456efcf8d\",\"known_at\":\"2025-09-09T12:00:00Z\",\"notes\":\"\",\"observed_alternatives\":{},\"outcome_id\":\"out_343d15750fa7408fbad6c4d08757c755\",\"realized\":{\"lineup_points\":101.5},\"source_refs\":[]}",
+  "payload_hash": "3663c7d63509efb736c169f249fdbbd7ca71acea855d8876a17b1e591def8715",
+  "record_type": "observed_outcome",
+  "schema_version": 1
+}

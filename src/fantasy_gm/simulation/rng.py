@@ -5,7 +5,7 @@ never by call order, so results are reproducible across processes and adding a n
 randomness does not perturb existing streams.
 
 Bit-exact reproducibility also depends on the numpy version (BitGenerator/distribution
-algorithms); ``numpy_version`` is recorded on every run.
+algorithms); the runtime fingerprint is recorded on every run.
 """
 
 from __future__ import annotations
@@ -26,6 +26,3 @@ def generator_for(seed: SeedSpec) -> np.random.Generator:
         entropy=seed.root_seed, spawn_key=tuple(_label_to_int(p) for p in seed.path)
     )
     return np.random.Generator(np.random.PCG64(sequence))
-
-
-NUMPY_VERSION: str = np.__version__

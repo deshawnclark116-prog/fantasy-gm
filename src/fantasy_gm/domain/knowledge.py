@@ -1,7 +1,7 @@
 """Leak-safe "what was knowable at time T" semantics.
 
 This module is the single source of truth for information-cutoff filtering. Every store
-implementation (in-memory, SQL) must delegate to ``resolve_known`` so the semantics cannot drift.
+implementation (in-memory, SQL) and the knowledge session delegate to it.
 """
 
 from __future__ import annotations
@@ -9,11 +9,26 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from fantasy_gm.domain.observation import Observation
-from fantasy_gm.domain.time import KnowledgeCutoff, KnowledgeMode, UtcDatetime
+from fantasy_gm.domain.time import (
+    InsufficientTimestampAction,
+    KnowledgeCutoff,
+    KnowledgeMode,
+    UtcDatetime,
+)
 
 
 class LeakageError(RuntimeError):
     """Raised when post-cutoff information reaches a computation that must be leak-free."""
+
+
+def timestamp_trusted(observation: Observation, cutoff: KnowledgeCutoff) -> bool:
+    """Whether the observation's timestamp quality is acceptable for this cutoff.
+
+    Always True under SYSTEM_KNOWLEDGE: our own ingestion time bounds knowability there.
+    """
+    if cutoff.mode is KnowledgeMode.SYSTEM_KNOWLEDGE:
+        return True
+    return observation.source.timestamp_quality in cutoff.timestamp_policy.accepted
 
 
 def is_known(observation: Observation, cutoff: KnowledgeCutoff) -> bool:
@@ -21,7 +36,10 @@ def is_known(observation: Observation, cutoff: KnowledgeCutoff) -> bool:
         return False
     if cutoff.mode is KnowledgeMode.SYSTEM_KNOWLEDGE:
         return observation.source.ingested_at <= cutoff.as_of
-    return True
+    policy = cutoff.timestamp_policy
+    return policy.on_insufficient is not InsufficientTimestampAction.EXCLUDE or (
+        timestamp_trusted(observation, cutoff)
+    )
 
 
 def _revision_order(observation: Observation) -> tuple[UtcDatetime, UtcDatetime, str]:

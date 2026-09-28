@@ -25,6 +25,12 @@ OutcomeId = NewType("OutcomeId", str)
 SnapshotId = NewType("SnapshotId", str)
 StatusEventId = NewType("StatusEventId", str)
 GradeId = NewType("GradeId", str)
+RunId = NewType("RunId", str)
+AttemptId = NewType("AttemptId", str)
+ExecutionEventId = NewType("ExecutionEventId", str)
+IdentityEventId = NewType("IdentityEventId", str)
+EstimateId = NewType("EstimateId", str)
+ValidationRecordId = NewType("ValidationRecordId", str)
 
 
 def _new(prefix: str) -> str:
@@ -85,3 +91,27 @@ def new_status_event_id() -> StatusEventId:
 
 def new_grade_id() -> GradeId:
     return GradeId(_new("grd"))
+
+
+def new_run_id() -> RunId:
+    return RunId(_new("run"))
+
+
+def new_attempt_id() -> AttemptId:
+    return AttemptId(_new("att"))
+
+
+def new_execution_event_id() -> ExecutionEventId:
+    return ExecutionEventId(_new("xev"))
+
+
+def new_identity_event_id() -> IdentityEventId:
+    return IdentityEventId(_new("idm"))
+
+
+def new_estimate_id() -> EstimateId:
+    return EstimateId(_new("cfe"))
+
+
+def new_validation_record_id() -> ValidationRecordId:
+    return ValidationRecordId(_new("val"))

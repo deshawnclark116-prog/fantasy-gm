@@ -1,0 +1,6 @@
+{
+  "payload": "{\"asserted_by\":\"golden\",\"confidence\":1.0,\"event_id\":\"idm_72e2a49ab90146c69a3c0bbbf4a3acba\",\"evidence\":\"\",\"internal_id\":\"plr_golden\",\"method\":\"curated_crosswalk\",\"reason\":\"\",\"ref\":{\"entity_type\":\"player\",\"external_id\":\"S-1\",\"provider\":\"sleeper\"},\"status\":\"verified\",\"supersedes_event_id\":null}",
+  "payload_hash": "097ea9aa88f12adbd9b58491568560770abda0286287e215b7760fcc51aa5083",
+  "record_type": "identity_mapping_event",
+  "schema_version": 1
+}

@@ -1,6 +1,6 @@
 # ADR 0006 — Autonomy modes, provider capabilities, and a separate execution path
 
-**Status:** accepted
+**Status:** accepted; amended by ADR 0012 (execution safety) and ADR 0016 (validation state, risk classes, freshness). The confidence threshold described below is removed.
 
 ## Decision
 * Modes: OBSERVE, RECOMMEND, APPROVAL_REQUIRED, AUTONOMOUS; per-decision-type overrides; the

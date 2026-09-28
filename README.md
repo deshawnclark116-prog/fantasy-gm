@@ -6,21 +6,34 @@ execution. Decisions optimise **league-specific expected championship equity** f
 **raw NFL data**, with explicit uncertainty, and every decision is recorded so it can be graded
 honestly later.
 
-> Status: **Foundation v0.1**. The backend skeleton, canonical domain, leak-safe
-> observation store, Organizational Intent v0, the decision ledger, the autonomy gate and
-> seedable simulation interfaces exist. There is **no projection model, no real provider
-> integration, no UI and no full simulator yet**. Those need an architecture review first.
+> Status: **Foundation v0.1.1** (auditability, temporal integrity and execution safety).
+> What exists:
+> * the canonical domain, a leak-safe observation store and knowledge sessions;
+> * Organizational Intent v0, the versioned immutable ledger and a fail-closed autonomy gate;
+> * idempotent, crash-safe execution attempts and seedable simulation interfaces.
+>
+> There is **no projection model, no real provider integration, no candidate generation or
+> optimiser, no UI and no full simulator yet**. Those need an architecture review first.
 
 ## Quick start
 
 ```bash
-make install        # uv venv (Python 3.12) + editable install with dev extras
+make install        # uv sync --frozen --all-extras (exact locked dependency set)
 make check          # ruff lint + format check, mypy --strict, pytest
+make test-pg        # PostgreSQL-only tests; needs FANTASY_GM_TEST_POSTGRES_URL
 make migrate        # alembic upgrade head (uses FANTASY_GM_DATABASE_URL)
 ```
 
 Copy `.env.example` to `.env` to configure. Provider writes are off by default
 (`FANTASY_GM_EXECUTION_ENABLED=false`, a global kill switch).
+
+Tests exercise three backends:
+* in-memory reference implementations;
+* file SQLite;
+* a real PostgreSQL server, when `FANTASY_GM_TEST_POSTGRES_URL` is set.
+
+CI runs a PostgreSQL 16 service and sets `FANTASY_GM_REQUIRE_POSTGRES=1`, so PostgreSQL tests
+can never be silently skipped there.
 
 ## Target architecture
 
@@ -34,7 +47,7 @@ Data Providers ─► Canonical NFL Data Layer ─► Event Detector ─► Play
 
 Bold = exists in v0.1 (at least as a contract):
 
-| Layer | v0.1 |
+| Layer | v0.1.1 |
 |---|---|
 | **Data providers** | Protocols + provider-shaped records + ID-resolving ingestion mappers. No vendor adapters. |
 | **Canonical NFL data layer** | Bitemporal observations, internal IDs, provider-ID registry, as-of store (memory + SQL). |
@@ -55,59 +68,69 @@ Bold = exists in v0.1 (at least as a contract):
 ```
 src/fantasy_gm/
   domain/                 pure data + invariants, no IO
-    time.py               UTC-only timestamps, KnowledgeCutoff / KnowledgeMode
-    ids.py identity.py    internal IDs; ProviderRef / ProviderIdMapping
-    observation.py        bitemporal Observation base (observed_at, effective_at, ingested_at)
+    time.py clock.py      UTC timestamps, KnowledgeCutoff, TimestampQuality, injected clocks
+    run_context.py        LIVE / PAPER / REPLAY
+    observation.py        bitemporal Observation base + SourceRef (timestamp trust, raw ts)
     knowledge.py          THE as-of semantics (resolve_known) + LeakageError
-    nfl.py                Player, NFLTeam, NFLGame, PlayerTeamAssignment, DraftCapital,
-                          ContractSignal, DepthChartSignal, UsageSnapshot, InjuryStatus,
-                          RosterTransactionSignal, CoachingAssignment
-    league.py             ScoringRules, RosterRules, RosterSlot, League, FantasyTeam,
-                          FantasyRoster, DraftPick, draft/waiver/playoff settings
-    actions.py            typed actions, each declaring its required provider capability
-    decision.py           Decision, DecisionCandidate, DecisionEvidence, OutcomeDistribution,
-                          DecisionStatusEvent, ExecutionResult, DecisionOutcome, DecisionGrade
-    autonomy.py           AutonomyMode, DecisionType, AutonomyPolicy
-    capabilities.py       ProviderCapability
-    state.py market.py seeds.py
-  providers/              protocols, provider records, identity registry, ingestion mappers
-  player_state/           ObservationStore protocol + in-memory store, PlayerState builder
-  organizational_intent/  config (all heuristics, hashed), components (pure), engine, inputs
-  leagues/                scoring engine, roster validation
-  draft/                  pick-order generation, picks-until-next-turn
-  decisions/              ledger, autonomy gate, execution service
-  simulation/             seed derivation, distributions, protocols, reference samplers
-  grading/                grader
-  persistence/            SQLAlchemy Core tables, SQL store / ledger / identity registry
+    evidence.py           EvidenceManifest (sealed by a knowledge session)
+    artifacts.py          ModelArtifactManifest, RuntimeFingerprint
+    validation.py risk.py validation state; action risk classes
+    nfl.py league.py      NFL facts; stable League identity + temporal league settings
+    roles.py              latent role dimensions (deployment vs target earning vs ...)
+    decision.py           Decision, statuses, ObservedOutcome/Grade, Counterfactual* (separate)
+    execution.py          execution-attempt events, idempotency keys, derived state
+    identity.py           append-only, correctable provider-ID mapping events
+    autonomy.py           AutonomyMode, AutonomyPolicy, FreshnessPolicy
+  records/                versioned, hash-verified codecs for every durable record
+  knowledge/              KnowledgeSession: the only read interface engines receive
+  providers/              async protocols, provider records, identity registry, ingestion
+  player_state/           stores (append-only), observed role vectors, PlayerState builder
+  organizational_intent/  config (hashed heuristics), pure components, engine, inputs
+  leagues/                scoring, roster validation, temporal league-state reconstruction
+  draft/                  pick order
+  decisions/              builder, ledger, autonomy gate, execution service
+  models/                 model-artifact + validation registry
+  simulation/             seeds, distributions, protocols, reference samplers, offload
+  grading/                observed grading; model-based counterfactual evaluation
+  persistence/            SQLAlchemy Core tables + SQL store / ledger / identity / models
   api/                    FastAPI app (health + read-only ledger)
-alembic/                  migrations (0001_foundation incl. append-only triggers)
-docs/adr/                 architecture decision records
+  runtime.py              runtime/build fingerprint
+alembic/                  migrations (append-only triggers incl. TRUNCATE on PostgreSQL)
+docs/adr/                 architecture decision records 0001-0018
 docs/REVIEW_NOTES.md      weaknesses & open questions for architecture review
-tests/acceptance/         the ten v0.1 acceptance criteria, one class each
+tests/acceptance/         v0.1 criteria + v0.1.1 criteria (one class per review item)
+tests/fixtures/records/   golden v1 payloads that must stay readable forever
 ```
-
-Dependency direction: `domain` depends on nothing; engines (`organizational_intent`,
-`leagues`, `draft`, `simulation`, `grading`, `decisions`) depend on `domain` and protocols;
-`persistence` and `api` are adapters at the edge.
 
 ## Core invariants
 
-1. **Internal IDs only.** Provider IDs live in `ProviderIdMapping`; one ref → one internal ID;
-   unknown refs fail ingestion instead of silently creating players.
-2. **Bitemporal, append-only observations.** Every time-varying fact carries `effective_at`,
-   `observed_at` and `source.ingested_at`. Corrections are new observations with the same
-   `fact_key`. Queries *require* a `KnowledgeCutoff`; there is no "read everything" API.
-3. **Two knowledge modes.** `SYSTEM_KNOWLEDGE` (default; observed *and* ingested by the cutoff)
-   for live decisions, `PUBLIC_AVAILABILITY` for backtests over backfilled data.
-4. **Decisions are immutable.** Recorded once as canonical JSON + SHA-256; re-verified on every
-   read; evidence observed after the cutoff is rejected at construction; outcomes must post-date
-   the cutoff; grades carry the decision hash they were computed against.
-5. **Execution is separated from intelligence** and gated twice (routing at record time,
-   authorisation immediately before the provider call). A missing capability produces an
-   actionable manual notification, never an attempted write.
-6. **Reproducible randomness.** `SeedSpec(root_seed, path)` derives label-keyed streams via
-   SHA-256 → numpy `SeedSequence`; every run records seed, request hash and numpy version.
-7. **No invented numbers.** Organizational Intent v0 heuristics are all in one hashed config,
-   labelled unvalidated; absent evidence yields `score=None`, never zero.
+1. **Internal IDs only.** Provider IDs are correctable, append-only mapping assertions.
+   Ingestion accepts VERIFIED mappings only, and there is no silent reassignment.
+2. **Bitemporal, append-only observations.**
+   * Each carries `effective_at`, `observed_at` (with its timestamp quality and the raw
+     provider value) and `ingested_at`, plus the store-stamped `recorded_at`.
+   * Under SYSTEM_KNOWLEDGE a fact is knowable only if it was physically stored by the
+     cutoff.
+3. **Engines read only through a `KnowledgeSession`.** Every read is cutoff-filtered and
+   recorded in an evidence manifest, and the manifest is sealed into the decision. Future-
+   trained model artifacts are refused.
+4. **Three times, one authority.** `decision_time` and `information_cutoff` are logical times.
+   `recorded_at` is stamped by the ledger clock, and LIVE records cannot be backdated.
+5. **Every durable record is versioned and hash-verified.** The stored bytes are verified
+   before parsing, then decoded by the reader for their schema version. History is never
+   rewritten.
+6. **Autonomy fails closed.** It requires all of: a LIVE run, a VALIDATED model and
+   calibrator for this decision type and regime, a risk class within the policy ceiling,
+   fresh information, the provider capability, and the kill switch on.
+7. **Execution is at most once.**
+   * A claim with a lease is taken before any call.
+   * The idempotency key is deterministic.
+   * An unknown outcome is reconciled before any retry, after a settle window.
+   * Decision appends are serialised per decision.
+8. **Observed outcomes are never mixed with model-based counterfactuals.** They use different
+   types, codecs and tables.
+9. **Roles are multidimensional.** Deployment is separate from target earning. There is no
+   aggregate organizational-intent score.
+10. **Reproducibility envelope** on every simulation, with `uv.lock` pinning dependencies.
 
 See `docs/adr/` for rationale and `docs/REVIEW_NOTES.md` for known weaknesses.

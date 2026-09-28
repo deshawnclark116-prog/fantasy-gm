@@ -1,0 +1,6 @@
+{
+  "payload": "{\"calibration_artifact_hash\":null,\"calibration_version\":null,\"code_version\":null,\"config_hash\":\"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"created_at\":\"2026-09-28T12:00:00Z\",\"feature_schema_hash\":\"26f27ba0b1862df640cf49a3b3c39046bcf89550f829a51be321150b897546f1\",\"feature_schema_version\":\"features_v1\",\"fit_kind\":\"fitted\",\"name\":\"test_model\",\"notes\":\"\",\"runtime\":null,\"trained_through\":\"2025-09-01T12:00:00Z\",\"training_data_manifest_hash\":\"711e10dd4fbbc806ca6d5857b8737d4f49f1c6ad14b8a7e07d2ddf1f274f7e8a\",\"version\":\"1\"}",
+  "payload_hash": "8953aa1a5a8557da4991fd9116ae57785454b7fd285290f3c8b9367d6229461f",
+  "record_type": "model_artifact",
+  "schema_version": 1
+}

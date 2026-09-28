@@ -1,15 +1,21 @@
 """Decision ledger records.
 
 A ``Decision`` is written once and never mutated. Everything that happens afterwards --
-approval, execution, the realised outcome, grading -- is a *separate* append-only record keyed by
-``decision_id`` (see ADR 0004).
+approval, execution attempts, observed outcomes, grades, model-based counterfactual estimates --
+is a *separate* append-only record keyed by ``decision_id`` (ADR 0004, ADR 0013).
+
+Three times are kept deliberately distinct:
+* ``decision_time``       -- the logical time of the decision (historical in a replay);
+* ``information_cutoff``  -- the knowledge boundary of its evidence (<= decision_time);
+* ledger ``recorded_at``  -- when the ledger physically wrote it; stamped by the ledger's own
+  clock, never supplied by the caller and therefore not a field of this model.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 from itertools import pairwise
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -25,11 +31,12 @@ from fantasy_gm.domain.actions import (
 )
 from fantasy_gm.domain.autonomy import AutonomyMode, DecisionType
 from fantasy_gm.domain.base import DomainModel
+from fantasy_gm.domain.evidence import EvidenceKind, EvidenceManifest
 from fantasy_gm.domain.identity import ProviderName
 from fantasy_gm.domain.ids import (
     CandidateId,
     DecisionId,
-    EvidenceId,
+    EstimateId,
     FantasyTeamId,
     GradeId,
     LeagueId,
@@ -37,13 +44,14 @@ from fantasy_gm.domain.ids import (
     StatusEventId,
     new_candidate_id,
     new_decision_id,
-    new_evidence_id,
+    new_estimate_id,
     new_grade_id,
     new_outcome_id,
     new_status_event_id,
 )
+from fantasy_gm.domain.run_context import RunContext
 from fantasy_gm.domain.seeds import SeedSpec
-from fantasy_gm.domain.time import KnowledgeMode, UtcDatetime
+from fantasy_gm.domain.time import UtcDatetime
 
 _ALLOWED_ACTIONS: dict[DecisionType, tuple[type[DomainModel], ...]] = {
     DecisionType.DRAFT_PICK: (DraftSelection,),
@@ -57,8 +65,7 @@ _ALLOWED_ACTIONS: dict[DecisionType, tuple[type[DomainModel], ...]] = {
 
 
 class OutcomeDistribution(DomainModel):
-    """A predictive distribution for one scalar metric (e.g. delta championship probability,
-    weekly points). Quantile keys are probabilities in (0, 1)."""
+    """A predictive distribution for one scalar metric. Quantile keys are probabilities."""
 
     metric: str = Field(min_length=1)
     unit: str = Field(min_length=1)
@@ -83,30 +90,11 @@ class OutcomeDistribution(DomainModel):
 
 
 class ConfidenceAssessment(DomainModel):
+    """Descriptive only. It never authorises execution (see ValidationState / risk policy)."""
+
     score: float = Field(ge=0.0, le=1.0)
     insufficient_evidence: bool
     reasons: tuple[str, ...] = ()
-
-
-class EvidenceKind(StrEnum):
-    OBSERVATION = "observation"
-    INTENT_SNAPSHOT = "intent_snapshot"
-    PLAYER_STATE = "player_state"
-    PROJECTION = "projection"
-    SIMULATION_RUN = "simulation_run"
-    LEAGUE_STATE = "league_state"
-    MARKET = "market"
-
-
-class DecisionEvidence(DomainModel):
-    """A pointer to information the decision used, with the time it became knowable."""
-
-    evidence_id: EvidenceId = Field(default_factory=new_evidence_id)
-    kind: EvidenceKind
-    reference_id: str = Field(min_length=1)
-    observed_at: UtcDatetime
-    summary: str
-    reference_hash: str | None = None  # hash of the referenced record, when available
 
 
 class DecisionCandidate(DomainModel):
@@ -114,7 +102,7 @@ class DecisionCandidate(DomainModel):
     action: Action
     estimated_outcome: OutcomeDistribution | None = None
     rationale: str = ""
-    evidence_ids: tuple[EvidenceId, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
 
 
 class Decision(DomainModel):
@@ -122,13 +110,17 @@ class Decision(DomainModel):
     league_id: LeagueId
     fantasy_team_id: FantasyTeamId
     decision_type: DecisionType
-    created_at: UtcDatetime
+    run: RunContext
+    decision_time: UtcDatetime
     information_cutoff: UtcDatetime
-    knowledge_mode: KnowledgeMode = KnowledgeMode.SYSTEM_KNOWLEDGE
     candidates: tuple[DecisionCandidate, ...] = Field(min_length=1)
     selected_candidate_id: CandidateId
-    model_versions: dict[str, str] = Field(min_length=1)
-    evidence: tuple[DecisionEvidence, ...] = ()
+    engine_versions: dict[str, str] = Field(min_length=1)
+    # Artifact (model/heuristic) that produced the decision; it must appear in the manifest and
+    # is what validation state is checked against before any autonomous execution.
+    decision_artifact_hash: str
+    regime: str = Field(min_length=1)
+    evidence: EvidenceManifest
     confidence: ConfidenceAssessment
     autonomy_mode: AutonomyMode
     simulation_seed: SeedSpec | None = None
@@ -136,22 +128,28 @@ class Decision(DomainModel):
 
     @model_validator(mode="after")
     def _invariants(self) -> Self:
-        if self.information_cutoff > self.created_at:
-            raise ValueError("information_cutoff cannot be after created_at")
-        for ev in self.evidence:
-            if ev.observed_at > self.information_cutoff:
-                raise ValueError(
-                    f"evidence {ev.evidence_id} observed_at {ev.observed_at.isoformat()} is after "
-                    f"the information cutoff {self.information_cutoff.isoformat()} (leakage)"
-                )
+        if self.information_cutoff > self.decision_time:
+            raise ValueError("information_cutoff cannot be after decision_time")
+        manifest = self.evidence
+        if manifest.cutoff.as_of != self.information_cutoff:
+            raise ValueError("evidence manifest cutoff must equal the decision information_cutoff")
+        if manifest.cutoff.mode is not self.run.knowledge_mode:
+            raise ValueError("evidence manifest knowledge mode must match the run context")
+        if manifest.run_id != self.run.run_id or manifest.run_mode is not self.run.mode:
+            raise ValueError("evidence manifest belongs to a different run")
+        artifact_ids = {
+            e.reference_id for e in manifest.entries if e.kind is EvidenceKind.MODEL_ARTIFACT
+        }
+        if self.decision_artifact_hash not in artifact_ids:
+            raise ValueError("decision_artifact_hash must be declared in the evidence manifest")
         ids = [c.candidate_id for c in self.candidates]
         if len(ids) != len(set(ids)):
             raise ValueError("candidate ids must be unique")
         if self.selected_candidate_id not in ids:
             raise ValueError("selected_candidate_id must reference a candidate")
-        evidence_ids = {e.evidence_id for e in self.evidence}
+        known = manifest.ids()
         for cand in self.candidates:
-            missing = set(cand.evidence_ids) - evidence_ids
+            missing = set(cand.evidence_ids) - known
             if missing:
                 raise ValueError(f"candidate {cand.candidate_id} cites unknown evidence {missing}")
             allowed = _ALLOWED_ACTIONS[self.decision_type]
@@ -170,14 +168,15 @@ class Decision(DomainModel):
 
 
 class DecisionStatus(StrEnum):
-    RECORDED = "recorded"  # OBSERVE mode: kept for grading only
+    RECORDED = "recorded"  # OBSERVE mode / PAPER / REPLAY: kept for grading only
     RECOMMENDED = "recommended"
     AWAITING_APPROVAL = "awaiting_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
     EXECUTED = "executed"
-    EXECUTION_FAILED = "execution_failed"
-    EXECUTION_BLOCKED = "execution_blocked"  # a gate refused execution (capability, staleness..)
+    EXECUTION_FAILED = "execution_failed"  # provider definitively did not execute
+    EXECUTION_BLOCKED = "execution_blocked"  # a gate refused execution
+    EXECUTION_UNCERTAIN = "execution_uncertain"  # provider outcome unknown; reconcile first
     EXPIRED = "expired"
     SUPERSEDED = "superseded"
 
@@ -224,36 +223,78 @@ class DecisionStatusEvent(DomainModel):
         return self
 
 
-# --------------------------------------------------------------------------- outcomes & grades
+# --------------------------------------------------------------------------- observed outcomes
 
 
-class DecisionOutcome(DomainModel):
-    """What actually happened. Attached later; never alters the decision it describes."""
+class ObservedOutcome(DomainModel):
+    """Facts that really happened. Never contains simulated or model-based values."""
 
+    basis: Literal["observed"] = "observed"
     outcome_id: OutcomeId = Field(default_factory=new_outcome_id)
     decision_id: DecisionId
-    recorded_at: UtcDatetime
+    known_at: UtcDatetime  # when these facts became knowable
     realized: dict[str, float] = Field(min_length=1)
-    # Realised value of the *same metric* for non-selected candidates, where it is observable
-    # (e.g. the points a benched player scored). Absent entries are unknown, not zero.
-    candidate_realized: dict[CandidateId, float] = Field(default_factory=dict)
-    evidence: tuple[DecisionEvidence, ...] = ()
+    # Realised values of the same metric for non-selected candidates, only where directly
+    # observable (e.g. points a benched player actually scored). Absent = unknown, not zero.
+    observed_alternatives: dict[CandidateId, float] = Field(default_factory=dict)
+    source_refs: tuple[str, ...] = ()
     notes: str = ""
 
 
-class DecisionGrade(DomainModel):
+class ObservedGrade(DomainModel):
+    basis: Literal["observed"] = "observed"
     grade_id: GradeId = Field(default_factory=new_grade_id)
     decision_id: DecisionId
     outcome_id: OutcomeId
     graded_at: UtcDatetime
     grader_version: str
     metric: str
-    decision_hash: str  # hash of the decision as recorded; proves what was graded
+    decision_hash: str
     predicted_mean: float | None
     realized: float
-    error: float | None  # realized - predicted_mean
-    pit: float | None = Field(default=None, ge=0.0, le=1.0)  # probability integral transform
+    error: float | None
+    pit: float | None = Field(default=None, ge=0.0, le=1.0)
     pit_out_of_range: bool = False
-    regret: float | None = None  # best observed candidate value - selected value (>= 0)
-    selected_rank: int | None = None  # 1 = best among candidates with observed values
-    candidates_observed: int = 0
+    observed_regret: float | None = None  # only over *observed* alternatives
+    observed_rank: int | None = None
+    alternatives_observed: int = 0
+
+
+# --------------------------------------------------------------------------- counterfactuals
+
+
+class CounterfactualEstimate(DomainModel):
+    """A simulated/model-based estimate of what a non-selected candidate would have produced.
+
+    Deliberately a different type (and table) from ``ObservedOutcome``: it can never be read,
+    stored or graded as observed truth.
+    """
+
+    basis: Literal["model_based"] = "model_based"
+    estimate_id: EstimateId = Field(default_factory=new_estimate_id)
+    decision_id: DecisionId
+    candidate_id: CandidateId
+    metric: str
+    distribution: OutcomeDistribution
+    method: str = Field(min_length=1)
+    computed_at: UtcDatetime
+    model_artifact_hashes: tuple[str, ...] = Field(min_length=1)
+    simulation_request_hash: str | None = None
+    # Counterfactual evaluation may legitimately use post-decision facts (e.g. which players
+    # actually got hurt). That is hindsight by design and must be declared.
+    uses_post_decision_information: bool
+
+
+class CounterfactualEvaluation(DomainModel):
+    basis: Literal["model_based"] = "model_based"
+    evaluation_id: GradeId = Field(default_factory=new_grade_id)
+    decision_id: DecisionId
+    outcome_id: OutcomeId
+    estimate_ids: tuple[EstimateId, ...] = Field(min_length=1)
+    graded_at: UtcDatetime
+    grader_version: str
+    metric: str
+    decision_hash: str
+    selected_realized: float  # observed
+    counterfactual_means: dict[CandidateId, float]  # model-based
+    estimated_regret: float  # model-based: best counterfactual mean - observed selected

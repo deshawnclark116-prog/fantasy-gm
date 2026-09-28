@@ -4,132 +4,111 @@ from datetime import timedelta
 
 from fantasy_gm.decisions.autonomy import Routing, authorize_execution, route_decision
 from fantasy_gm.decisions.ledger import InMemoryDecisionLedger
-from fantasy_gm.domain.actions import WaiverClaim
 from fantasy_gm.domain.autonomy import AutonomyMode, AutonomyPolicy, DecisionType
 from fantasy_gm.domain.capabilities import ProviderCapability, is_read_only
-from fantasy_gm.domain.decision import (
-    ActorKind,
-    ConfidenceAssessment,
-    Decision,
-    DecisionCandidate,
-    DecisionStatus,
+from fantasy_gm.domain.clock import ManualClock
+from fantasy_gm.domain.decision import ActorKind, DecisionStatus
+from fantasy_gm.domain.validation import ModelValidationRecord, ValidationState
+from fantasy_gm.models.registry import InMemoryModelRegistry
+from tests.factories import (
+    heuristic_artifact,
+    lineup_decision,
+    live_run,
+    make_league,
+    memory_store,
+    open_session,
+    status_event,
+    ts,
 )
-from fantasy_gm.domain.ids import new_player_id
-from tests.factories import lineup_decision, make_league, status_event
-
-WRITE = frozenset(
-    {ProviderCapability.READ, ProviderCapability.LINEUP_WRITE, ProviderCapability.WAIVER_WRITE}
-)
+from tests.fakes import WRITE_CAPS
 
 
-def _policy(league_id: str, mode: AutonomyMode = AutonomyMode.AUTONOMOUS) -> AutonomyPolicy:
-    return AutonomyPolicy(league_id=league_id, default_mode=mode)  # type: ignore[arg-type]
+def _setup(clock: ManualClock, validated: bool = True):  # type: ignore[no-untyped-def]
+    league = make_league()
+    models = InMemoryModelRegistry(clock)
+    art = heuristic_artifact("engine")
+    models.register_artifact(art)
+    if validated:
+        models.record_validation(
+            ModelValidationRecord(
+                artifact_hash=art.artifact_hash,
+                decision_type=DecisionType.LINEUP,
+                regime="regular_season",
+                state=ValidationState.VALIDATED,
+                effective_at=clock.now(),
+                approved_by="t",
+            )
+        )
+    d = lineup_decision(
+        open_session(memory_store(), clock, clock.now(), run=live_run()),
+        league_id=league.league_id,
+        mode=AutonomyMode.AUTONOMOUS,
+        artifact=art,
+    )
+    policy = AutonomyPolicy(league_id=league.league_id, default_mode=AutonomyMode.AUTONOMOUS)
+    return league, models, d, policy
 
 
 def test_read_only_helper() -> None:
     assert is_read_only(frozenset({ProviderCapability.READ}))
-    assert not is_read_only(WRITE)
+    assert not is_read_only(WRITE_CAPS)
 
 
-def test_policy_mode_is_most_restrictive() -> None:
-    league = make_league()
-    d = lineup_decision(league_id=league.league_id, mode=AutonomyMode.AUTONOMOUS)
-    policy = AutonomyPolicy(
-        league_id=league.league_id,
-        default_mode=AutonomyMode.AUTONOMOUS,
-        mode_overrides={DecisionType.LINEUP: AutonomyMode.OBSERVE},
+def test_policy_mode_is_most_restrictive(clock: ManualClock) -> None:
+    _, models, d, policy = _setup(clock)
+    observe = policy.model_copy(
+        update={"mode_overrides": {DecisionType.LINEUP: AutonomyMode.OBSERVE}}
     )
-    r = route_decision(d, policy, WRITE, league)
+    r = route_decision(d, observe, WRITE_CAPS, models, clock.now())
     assert r.routing is Routing.RECORD_ONLY and r.initial_status is DecisionStatus.RECORDED
 
 
-def test_low_confidence_downgrades_to_approval() -> None:
-    league = make_league()
-    d = lineup_decision(league_id=league.league_id, mode=AutonomyMode.AUTONOMOUS, confidence=0.5)
-    r = route_decision(d, _policy(league.league_id), WRITE, league)
-    assert r.routing is Routing.REQUEST_APPROVAL
-    assert any("confidence" in reason for reason in r.reasons)
-
-
-def test_insufficient_evidence_blocks_autonomy() -> None:
-    league = make_league()
-    d = lineup_decision(league_id=league.league_id, mode=AutonomyMode.AUTONOMOUS, insufficient=True)
-    r = route_decision(d, _policy(league.league_id), WRITE, league)
-    assert r.routing is Routing.REQUEST_APPROVAL
-
-
-def _waiver_decision(league_id: str, bid: int) -> Decision:
-    base = lineup_decision(league_id=league_id, mode=AutonomyMode.AUTONOMOUS)  # type: ignore[arg-type]
-    cand = DecisionCandidate(action=WaiverClaim(add_player_id=new_player_id(), faab_bid=bid))
-    return Decision(
-        league_id=base.league_id,
-        fantasy_team_id=base.fantasy_team_id,
-        decision_type=DecisionType.WAIVER_CLAIM,
-        created_at=base.created_at,
-        information_cutoff=base.information_cutoff,
-        candidates=(cand,),
-        selected_candidate_id=cand.candidate_id,
-        model_versions={"decision_engine": "t"},
-        confidence=ConfidenceAssessment(score=0.95, insufficient_evidence=False),
-        autonomy_mode=AutonomyMode.AUTONOMOUS,
+def test_replay_decisions_are_record_only(clock: ManualClock) -> None:
+    league, models, _, policy = _setup(clock)
+    replay = lineup_decision(
+        open_session(memory_store(), clock, ts(days=6)),
+        league_id=league.league_id,
+        mode=AutonomyMode.AUTONOMOUS,
+    )
+    assert route_decision(replay, policy, WRITE_CAPS, models, clock.now()).routing is (
+        Routing.RECORD_ONLY
     )
 
 
-def test_faab_ceiling() -> None:
-    league = make_league(faab_budget=100)
-    ok = route_decision(
-        _waiver_decision(league.league_id, 20), _policy(league.league_id), WRITE, league
+def test_insufficient_evidence_blocks_autonomy(clock: ManualClock) -> None:
+    _, models, d, policy = _setup(clock)
+    flagged = d.model_copy(
+        update={"confidence": d.confidence.model_copy(update={"insufficient_evidence": True})}
     )
-    big = route_decision(
-        _waiver_decision(league.league_id, 60), _policy(league.league_id), WRITE, league
+    assert route_decision(flagged, policy, WRITE_CAPS, models, clock.now()).routing is (
+        Routing.REQUEST_APPROVAL
     )
-    assert ok.routing is Routing.EXECUTE
-    assert big.routing is Routing.REQUEST_APPROVAL
 
 
-def _approved_entry(mode: AutonomyMode = AutonomyMode.AUTONOMOUS):  # type: ignore[no-untyped-def]
-    league = make_league()
-    d = lineup_decision(league_id=league.league_id, mode=mode)
-    ledger = InMemoryDecisionLedger()
+def test_kill_switch_staleness_and_policy_downgrade(clock: ManualClock) -> None:
+    _, models, d, policy = _setup(clock)
+    ledger = InMemoryDecisionLedger(clock)
     ledger.record(d, status_event(d, DecisionStatus.APPROVED, actor=ActorKind.POLICY))
-    return league, d, ledger.get(d.decision_id)
-
-
-def test_kill_switch_and_staleness() -> None:
-    league, d, entry = _approved_entry()
-    policy = _policy(league.league_id)
-    off = authorize_execution(
-        entry, policy, WRITE, d.created_at, execution_enabled=False, league=league
-    )
+    entry = ledger.get(d.decision_id)
+    now = clock.now()
+    off = authorize_execution(entry, policy, WRITE_CAPS, models, now, execution_enabled=False)
     assert not off.allowed and any("kill switch" in r for r in off.reasons)
     stale = authorize_execution(
-        entry,
-        policy,
-        WRITE,
-        d.created_at + timedelta(days=1),
-        execution_enabled=True,
-        league=league,
+        entry, policy, WRITE_CAPS, models, now + timedelta(hours=1), execution_enabled=True
     )
     assert not stale.allowed and any("stale" in r for r in stale.reasons)
-    fresh = authorize_execution(
-        entry, policy, WRITE, d.created_at, execution_enabled=True, league=league
-    )
-    assert fresh.allowed
+    assert authorize_execution(
+        entry, policy, WRITE_CAPS, models, now, execution_enabled=True
+    ).allowed
+    downgraded = policy.model_copy(update={"default_mode": AutonomyMode.RECOMMEND})
+    assert not authorize_execution(
+        entry, downgraded, WRITE_CAPS, models, now, execution_enabled=True
+    ).allowed
 
 
-def test_policy_downgrade_after_approval_blocks_execution() -> None:
-    league, d, entry = _approved_entry()
-    downgraded = _policy(league.league_id, AutonomyMode.RECOMMEND)
-    auth = authorize_execution(
-        entry, downgraded, WRITE, d.created_at, execution_enabled=True, league=league
-    )
-    assert not auth.allowed
-
-
-def test_no_action_is_never_executed() -> None:
-    league = make_league()
-    d = lineup_decision(league_id=league.league_id, mode=AutonomyMode.AUTONOMOUS)
+def test_no_action_is_never_executed(clock: ManualClock) -> None:
+    _, models, d, policy = _setup(clock)
     hold = next(c for c in d.candidates if c.action.action_type == "no_action")
     d2 = d.model_copy(update={"selected_candidate_id": hold.candidate_id})
-    r = route_decision(d2, _policy(league.league_id), WRITE, league)
+    r = route_decision(d2, policy, WRITE_CAPS, models, clock.now())
     assert r.routing is Routing.NOTIFY and not r.manual_action_required

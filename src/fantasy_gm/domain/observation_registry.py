@@ -1,10 +1,18 @@
-"""Registry of concrete observation types, used for polymorphic (de)serialization."""
+"""Registry of concrete observation types, keyed by ``kind``."""
 
 from __future__ import annotations
 
-from typing import Any
-
-from fantasy_gm.domain.league import FantasyRoster
+from fantasy_gm.domain.league import (
+    DraftBoardState,
+    FantasyRoster,
+    LeagueDraftSettings,
+    LeagueRosterSettings,
+    LeagueScoringSettings,
+    LeagueSeasonSettings,
+    LeagueWaiverSettings,
+    PlatformEligibility,
+    WaiverBudgetState,
+)
 from fantasy_gm.domain.market import MarketADPObservation
 from fantasy_gm.domain.nfl import (
     CoachingAssignment,
@@ -14,6 +22,7 @@ from fantasy_gm.domain.nfl import (
     InjuryStatus,
     NFLGame,
     PlayerTeamAssignment,
+    PreseasonGameContext,
     RosterTransactionSignal,
     UsageSnapshot,
 )
@@ -31,15 +40,16 @@ OBSERVATION_TYPES: dict[str, type[Observation]] = {
         InjuryStatus,
         RosterTransactionSignal,
         CoachingAssignment,
+        PreseasonGameContext,
         MarketADPObservation,
         FantasyRoster,
+        LeagueScoringSettings,
+        LeagueRosterSettings,
+        LeagueWaiverSettings,
+        LeagueSeasonSettings,
+        LeagueDraftSettings,
+        WaiverBudgetState,
+        PlatformEligibility,
+        DraftBoardState,
     )
 }
-
-
-def deserialize_observation(kind: str, payload: dict[str, Any]) -> Observation:
-    try:
-        cls = OBSERVATION_TYPES[kind]
-    except KeyError as exc:
-        raise ValueError(f"unknown observation kind {kind!r}") from exc
-    return cls.model_validate(payload)

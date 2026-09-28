@@ -10,8 +10,9 @@ import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import StrEnum
 
-from fantasy_gm.domain.ids import NFLTeamId
+from fantasy_gm.domain.ids import NFLTeamId, PlayerId
 from fantasy_gm.domain.nfl import (
     CoachingAssignment,
     CoachingRole,
@@ -21,6 +22,7 @@ from fantasy_gm.domain.nfl import (
     DepthChartSource,
     DraftCapital,
     Position,
+    PreseasonGameContext,
     RosterTransactionSignal,
     SeasonPhase,
     TeamTransactionKind,
@@ -28,9 +30,11 @@ from fantasy_gm.domain.nfl import (
     UsageSnapshot,
 )
 from fantasy_gm.domain.observation import Observation
+from fantasy_gm.domain.roles import RoleDimension, RoleEstimateStatus
 from fantasy_gm.organizational_intent.config import IntentConfigV0
 from fantasy_gm.organizational_intent.inputs import CompetitorEvidence
 from fantasy_gm.organizational_intent.snapshot import ProvenanceRecord
+from fantasy_gm.player_state.roles import observed_role_vector
 
 _DAYS_PER_YEAR = 365.25
 
@@ -444,83 +448,136 @@ def coaching_continuity(
 # --------------------------------------------------------------------------- preseason
 
 
+class Experience(StrEnum):
+    ROOKIE = "rookie"
+    VETERAN = "veteran"
+    UNKNOWN = "unknown"
+
+
+def experience_for(draft: DraftCapital | None, season: int) -> Experience:
+    if draft is None:
+        return Experience.UNKNOWN
+    return Experience.ROOKIE if draft.draft_year >= season else Experience.VETERAN
+
+
 def preseason_deployment(
     usage: Sequence[UsageSnapshot],
+    contexts: Sequence[PreseasonGameContext],
+    draft: DraftCapital | None,
     season: int,
     team_id: NFLTeamId | None,
     cfg: IntentConfigV0,
 ) -> ComponentResult:
-    method = "first_team_snap_share_v0"
+    """First-team deployment in preseason, conditioned on experience and starter-rest context.
+
+    * Total preseason snap share is never used (starters play the fewest snaps).
+    * A veteran's games where starters were rested are excluded: non-usage is not evidence.
+    * Missing context (rest status, experience) lowers confidence instead of being assumed.
+    """
+    method = "conditional_first_team_share_v1"
     games = [
         u
         for u in usage
         if u.phase is SeasonPhase.PRESEASON and u.season == season and u.team_id == team_id
     ]
-    with_split = [
-        u
-        for u in games
-        if UsageMetric.FIRST_TEAM_SNAPS in u.metrics
-        and u.metrics.get(UsageMetric.TEAM_FIRST_TEAM_SNAPS, 0) > 0
-    ]
-    if not with_split:
-        note = (
-            "no first-team snap split observed; total preseason snap share is NOT used as a proxy "
-            "because starters typically play the fewest preseason snaps"
+    if not games:
+        return ComponentResult(method=method, notes=("no preseason usage",))
+    experience = experience_for(draft, season)
+    ctx_by_game = {c.game_id: c for c in contexts if c.team_id == team_id}
+    included: list[tuple[UsageSnapshot, float, PreseasonGameContext | None]] = []
+    no_split = rested_vet = 0
+    for u in games:
+        ctx = ctx_by_game.get(u.game_id)
+        team_first = u.metrics.get(UsageMetric.TEAM_FIRST_TEAM_SNAPS, 0)
+        if UsageMetric.FIRST_TEAM_SNAPS not in u.metrics or team_first <= 0:
+            no_split += 1
+            continue
+        rested = ctx.starters_rested if ctx is not None else None
+        if experience is Experience.VETERAN and rested is True:
+            rested_vet += 1
+            continue
+        if ctx is None:
+            factor = cfg.preseason_unknown_context_factor
+        else:
+            factor = cfg.preseason_context_reliability.get(ctx.source_kind, 0.0)
+            if rested is None:
+                factor *= cfg.preseason_unknown_context_factor
+        included.append((u, factor, ctx))
+    notes: list[str] = [f"experience: {experience}"]
+    if no_split:
+        notes.append(
+            f"{no_split} game(s) lacked a first-team snap split; total preseason snap share is "
+            "not used as a proxy because starters typically play the fewest preseason snaps"
         )
-        return ComponentResult(method=method, notes=(note,) if games else ("no preseason usage",))
-    num = sum(u.metrics[UsageMetric.FIRST_TEAM_SNAPS] for u in with_split)
-    den = sum(u.metrics[UsageMetric.TEAM_FIRST_TEAM_SNAPS] for u in with_split)
+    if rested_vet:
+        notes.append(
+            f"{rested_vet} game(s) excluded: starters rested, and a veteran's preseason "
+            "non-usage is not negative evidence"
+        )
+    if not included:
+        return ComponentResult(method=method, notes=tuple(notes))
+    num = sum(u.metrics[UsageMetric.FIRST_TEAM_SNAPS] for u, _, _ in included)
+    den = sum(u.metrics[UsageMetric.TEAM_FIRST_TEAM_SNAPS] for u, _, _ in included)
     share = _clamp(num / den)
-    games_factor = min(1.0, len(with_split) / cfg.preseason_full_confidence_games)
+    games_factor = min(1.0, len(included) / cfg.preseason_full_confidence_games)
+    context_factor = sum(f for _, f, _ in included) / len(included)
+    experience_factor = (
+        cfg.preseason_unknown_experience_factor if experience is Experience.UNKNOWN else 1.0
+    )
+    if context_factor < 1.0:
+        notes.append(f"context confidence factor {context_factor:.2f} (missing/weak context)")
+    prov = [
+        provenance(
+            u,
+            f"preseason wk{u.week}: first-team snaps "
+            f"{u.metrics[UsageMetric.FIRST_TEAM_SNAPS]:g}/"
+            f"{u.metrics[UsageMetric.TEAM_FIRST_TEAM_SNAPS]:g}",
+        )
+        for u, _, _ in included
+    ]
+    prov += [
+        provenance(ctx, f"context: starters_rested={ctx.starters_rested}")
+        for _, _, ctx in included
+        if ctx is not None
+    ]
     return ComponentResult(
         method=method,
         score=share,
-        confidence=_clamp(cfg.preseason_first_team_confidence * games_factor),
-        measurements={"first_team_snap_share": share, "games": float(len(with_split))},
-        provenance=tuple(
-            provenance(
-                u,
-                f"preseason wk{u.week}: first-team snaps "
-                f"{u.metrics[UsageMetric.FIRST_TEAM_SNAPS]:g}/"
-                f"{u.metrics[UsageMetric.TEAM_FIRST_TEAM_SNAPS]:g}",
-            )
-            for u in with_split
+        confidence=_clamp(
+            cfg.preseason_first_team_confidence * games_factor * context_factor * experience_factor
         ),
+        measurements={
+            "first_team_snap_share": share,
+            "games": float(len(included)),
+            "context_factor": context_factor,
+        },
+        provenance=tuple(prov),
+        notes=tuple(notes),
     )
 
 
 # --------------------------------------------------------------------------- actual usage
 
 
-def primary_usage_share(u: UsageSnapshot, position: Position) -> tuple[float | None, str]:
-    """Position-appropriate opportunity share for one game, and the metric used."""
-    if position is Position.QB:
-        share = u.share(UsageMetric.DROPBACKS, UsageMetric.TEAM_DROPBACKS)
-        return share, "dropback_share"
-    if position is Position.RB:
-        opps = [u.metrics.get(m) for m in (UsageMetric.CARRIES, UsageMetric.TARGETS)]
-        team = [u.metrics.get(m) for m in (UsageMetric.TEAM_CARRIES, UsageMetric.TEAM_TARGETS)]
-        if None in opps or None in team:
-            return None, "opportunity_share"
-        den = sum(x for x in team if x is not None)
-        num = sum(x for x in opps if x is not None)
-        return (min(num / den, 1.0) if den > 0 else None), "opportunity_share"
-    if position in (Position.WR, Position.TE):
-        return u.share(UsageMetric.ROUTES, UsageMetric.TEAM_DROPBACKS), "route_participation"
-    return None, "undefined"
-
-
 def actual_usage(
     usage: Sequence[UsageSnapshot],
+    player_id: PlayerId,
     position: Position,
     season: int,
     team_id: NFLTeamId | None,
+    as_of: datetime,
     regime_start: datetime | None,
     cfg: IntentConfigV0,
 ) -> tuple[ComponentResult, float]:
-    """Returns (component, effective_games)."""
-    method = "recency_weighted_position_share_v0"
-    reference = cfg.usage_full_role_reference.get(position)
+    """Observed *deployment* by the current organisation. Returns (component, effective_games).
+
+    Built from the multidimensional observed role vector. Only deployment dimensions are scored
+    as organisational intent; target-earning dimensions (targets per route, first reads, air
+    yards) are what the *player* wins and are reported but not scored here.
+    """
+    method = "deployment_role_vector_v1"
+    preferences = cfg.usage_deployment_dimensions.get(position, ())
+    references = cfg.usage_full_role_reference.get(position, {})
     games = sorted(
         (
             u
@@ -535,57 +592,63 @@ def actual_usage(
     if not games:
         note = "no regular-season usage with current team"
         return ComponentResult(method=method, notes=(note,)), 0.0
-    if reference is None:
+    if not preferences:
         return (
-            ComponentResult(method=method, notes=(f"no usage role reference for {position}",)),
+            ComponentResult(method=method, notes=(f"no deployment dimensions for {position}",)),
             0.0,
         )
-    weighted_sum = 0.0
-    weight_total = 0.0
-    n_eff = 0.0
-    skipped = 0
-    fallbacks = 0
-    prov: list[ProvenanceRecord] = []
-    for i, u in enumerate(games):
-        share, metric = primary_usage_share(u, position)
-        quality = 1.0
-        if share is None:
-            share = u.share(UsageMetric.OFFENSE_SNAPS, UsageMetric.TEAM_OFFENSE_SNAPS)
-            metric, quality = "snap_share_fallback", cfg.usage_fallback_quality
-            if share is None:
-                skipped += 1
-                continue
-            fallbacks += 1
-        evidence_weight = (
-            quality
-            * _regime_factor(u.effective_at, regime_start, cfg)
-            * (cfg.usage_prior_season_discount if u.season < season else 1.0)
+
+    def weight(u: UsageSnapshot, index: int) -> tuple[float, float]:
+        evidence = _regime_factor(u.effective_at, regime_start, cfg) * (
+            cfg.usage_prior_season_discount if u.season < season else 1.0
         )
-        recency = _half_life(float(i), cfg.usage_recency_half_life_games)
-        weighted_sum += evidence_weight * recency * share
-        weight_total += evidence_weight * recency
-        n_eff += evidence_weight
-        prov.append(provenance(u, f"{u.season} wk{u.week} {metric}={share:.3f}"))
-    notes: list[str] = []
-    if skipped:
-        notes.append(f"{skipped} game(s) lacked any usable share metric and were excluded")
-    if fallbacks:
-        notes.append(f"{fallbacks} game(s) used snap share because the primary metric was missing")
-    if weight_total == 0:
-        return ComponentResult(method=method, provenance=tuple(prov), notes=tuple(notes)), 0.0
-    raw_share = weighted_sum / weight_total
+        return evidence, _half_life(float(index), cfg.usage_recency_half_life_games)
+
+    vector = observed_role_vector(player_id, position, games, as_of, weight)
+    measurements: dict[str, float] = {
+        dim.value: est.value
+        for dim, est in vector.estimates.items()
+        if est.status is RoleEstimateStatus.OBSERVED and est.value is not None
+    }
+    chosen: RoleDimension | None = next(
+        (d for d in preferences if vector.estimates[d].status is RoleEstimateStatus.OBSERVED),
+        None,
+    )
+    notes = [
+        "target-earning dimensions are reported in measurements but are not organisational "
+        "deployment and are not scored here"
+    ]
+    if chosen is None:
+        notes.append("no deployment dimension observable in any game")
+        return ComponentResult(method=method, measurements=measurements, notes=tuple(notes)), 0.0
+    est = vector.estimates[chosen]
+    assert est.value is not None
+    quality = 1.0 if chosen is preferences[0] else cfg.usage_fallback_quality
+    if quality < 1.0:
+        notes.append(f"fell back to {chosen} (preferred deployment metric unobserved)")
+    n_eff = est.effective_games * quality
+    reference = references[chosen]
+    measurements.update(
+        {
+            "deployment_value": est.value,
+            "full_role_reference": reference,
+            "effective_games": round(n_eff, 6),
+            "games_considered": float(len(games)),
+        }
+    )
+    used = set(est.source_observation_ids)
+    prov = tuple(
+        provenance(u, f"{u.season} wk{u.week} used for {chosen}")
+        for u in games
+        if u.observation_id in used
+    )
     return (
         ComponentResult(
-            method=method,
-            score=_clamp(raw_share / reference),
+            method=f"{method}:{chosen}",
+            score=_clamp(est.value / reference),
             confidence=_clamp(n_eff / (n_eff + cfg.prior_pseudo_games)),
-            measurements={
-                "weighted_share": round(raw_share, 6),
-                "full_role_reference": reference,
-                "effective_games": round(n_eff, 6),
-                "games_considered": float(len(games)),
-            },
-            provenance=tuple(prov),
+            measurements=measurements,
+            provenance=prov,
             notes=tuple(notes),
         ),
         n_eff,

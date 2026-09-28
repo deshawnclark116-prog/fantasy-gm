@@ -1,7 +1,7 @@
 """FastAPI application factory.
 
-v0.1 exposes health/version and read-only ledger access. There is intentionally no endpoint
-that executes transactions.
+Read-only in v0.1.1: health/version and ledger reads. There is intentionally no endpoint that
+executes transactions.
 """
 
 from typing import Annotated, Any
@@ -10,8 +10,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 
 from fantasy_gm import __version__
 from fantasy_gm.config import Settings
-from fantasy_gm.decisions.ledger import DecisionLedger, DecisionNotFoundError, TamperDetectedError
+from fantasy_gm.decisions.ledger import DecisionLedger, DecisionNotFoundError
 from fantasy_gm.domain.ids import DecisionId
+from fantasy_gm.records.codec import TamperDetectedError, UnknownSchemaVersionError
 
 
 # Module-level dependency (and no ``from __future__ import annotations``): FastAPI must be able
@@ -42,10 +43,12 @@ def create_app(ledger: DecisionLedger, settings: Settings | None = None) -> Fast
             entry = led.get(DecisionId(decision_id))
         except DecisionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="decision not found") from exc
-        except TamperDetectedError as exc:  # pragma: no cover - integrity failure
+        except (TamperDetectedError, UnknownSchemaVersionError) as exc:  # pragma: no cover
             raise HTTPException(status_code=500, detail="ledger integrity failure") from exc
         body: dict[str, Any] = entry.model_dump(mode="json")
         body["current_status"] = entry.current_status.value
+        body["decision_hash"] = entry.decision_hash
+        body["recorded_at"] = entry.recorded_at.isoformat()
         return body
 
     return app

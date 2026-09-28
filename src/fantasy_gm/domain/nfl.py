@@ -240,6 +240,13 @@ class UsageMetric(StrEnum):
     THIRD_DOWN_SNAPS = "third_down_snaps"
     TWO_MINUTE_SNAPS = "two_minute_snaps"
     PASS_BLOCK_SNAPS = "pass_block_snaps"
+    DESIGNED_RUSHES = "designed_rushes"
+    SCRAMBLES = "scrambles"
+    TEAM_FIRST_READ_TARGETS = "team_first_read_targets"
+    TEAM_RED_ZONE_TARGETS = "team_red_zone_targets"
+    TEAM_RED_ZONE_CARRIES = "team_red_zone_carries"
+    TEAM_THIRD_DOWN_SNAPS = "team_third_down_snaps"
+    TEAM_TWO_MINUTE_SNAPS = "team_two_minute_snaps"
 
 
 class UsageSnapshot(Observation):
@@ -366,6 +373,35 @@ class CoachingAssignment(Observation):
 
     def fact_key(self) -> str:
         return f"coach:{self.team_id}:{self.role}:{self.effective_at.isoformat()}"
+
+    def subject_team_id(self) -> NFLTeamId:
+        return self.team_id
+
+
+class ContextSourceKind(StrEnum):
+    OFFICIAL_PARTICIPATION = "official_participation"
+    CHARTING_PROVIDER = "charting_provider"
+    BEAT_REPORT = "beat_report"
+    INFERRED = "inferred"
+
+
+class PreseasonGameContext(Observation):
+    """Team-level context for one preseason game, when genuinely observable.
+
+    ``None`` fields mean "not known" -- never "false". Missing context lowers confidence in
+    preseason evidence rather than being filled in.
+    """
+
+    kind: ClassVar[str] = "preseason_game_context"
+    team_id: NFLTeamId
+    game_id: GameId
+    season: int
+    starters_rested: bool | None = None
+    first_team_offense_drives: int | None = Field(default=None, ge=0)
+    source_kind: ContextSourceKind
+
+    def fact_key(self) -> str:
+        return f"preseason_ctx:{self.team_id}:{self.game_id}"
 
     def subject_team_id(self) -> NFLTeamId:
         return self.team_id

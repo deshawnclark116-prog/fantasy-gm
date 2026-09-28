@@ -12,6 +12,7 @@ from fantasy_gm.domain.base import DomainModel
 from fantasy_gm.domain.identity import ProviderName
 from fantasy_gm.domain.ids import NFLTeamId, ObservationId, PlayerId, SnapshotId, new_snapshot_id
 from fantasy_gm.domain.nfl import Position
+from fantasy_gm.domain.roles import ROLE_DIMENSIONS, RoleDimension, RoleFamily
 from fantasy_gm.domain.time import KnowledgeMode, UtcDatetime
 
 
@@ -44,6 +45,31 @@ COMPONENT_CATEGORY: dict[IntentComponent, ComponentCategory] = {
 }
 
 
+# Which latent-role families each component is evidence about. Future role models consume
+# components as priors/covariates on exactly these dimensions -- never as one intent score.
+COMPONENT_INFORMS: dict[IntentComponent, tuple[RoleFamily, ...]] = {
+    IntentComponent.DRAFT_INVESTMENT: (RoleFamily.DEPLOYMENT, RoleFamily.TARGET_EARNING),
+    IntentComponent.CONTRACT_INVESTMENT: (RoleFamily.DEPLOYMENT,),
+    IntentComponent.ROSTER_COMPETITION: (RoleFamily.DEPLOYMENT,),
+    IntentComponent.RECENT_TRANSACTIONS: (RoleFamily.DEPLOYMENT,),
+    IntentComponent.DEPTH_CHART: (RoleFamily.DEPLOYMENT,),
+    IntentComponent.COACHING_CONTINUITY: (RoleFamily.ENVIRONMENT,),
+    IntentComponent.PRESEASON_DEPLOYMENT: (RoleFamily.DEPLOYMENT,),
+    IntentComponent.ACTUAL_USAGE: (RoleFamily.DEPLOYMENT,),
+}
+
+
+def informed_dimensions(
+    component: IntentComponent, position: Position
+) -> tuple[RoleDimension, ...]:
+    families = COMPONENT_INFORMS[component]
+    return tuple(
+        d
+        for d, spec in ROLE_DIMENSIONS.items()
+        if position in spec.positions and spec.family in families and spec.supported
+    )
+
+
 class ProvenanceRecord(DomainModel):
     observation_id: ObservationId
     observation_kind: str
@@ -68,6 +94,7 @@ class ComponentSignal(DomainModel):
     confidence: float = Field(ge=0.0, le=1.0)
     influence: float = Field(default=0.0, ge=0.0, le=1.0)
     method: str
+    informs: tuple[RoleDimension, ...] = ()
     measurements: dict[str, float] = Field(default_factory=dict)
     provenance: tuple[ProvenanceRecord, ...] = ()
     notes: tuple[str, ...] = ()

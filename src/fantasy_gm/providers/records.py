@@ -24,12 +24,18 @@ from fantasy_gm.domain.nfl import (
     SeasonPhase,
     UsageMetric,
 )
-from fantasy_gm.domain.time import UtcDatetime
+from fantasy_gm.domain.time import TimestampQuality, UtcDatetime
 
 
 class ProviderRecord(DomainModel):
+    """Common envelope. ``observed_at`` must be what ``timestamp_quality`` says it is; the
+    provider's raw timestamp is preserved verbatim for audit."""
+
     observed_at: UtcDatetime
     effective_at: UtcDatetime
+    timestamp_quality: TimestampQuality
+    raw_timestamp: str | None = None
+    raw_timestamp_field: str | None = None
     provider_record_id: str | None = None
 
 

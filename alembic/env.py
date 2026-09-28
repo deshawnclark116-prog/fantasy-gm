@@ -19,7 +19,7 @@ url = context.get_x_argument(as_dictionary=True).get("url") or config.get_main_o
 )
 if not url:
     url = Settings().database_url
-config.set_main_option("sqlalchemy.url", url)
+config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
 target_metadata = metadata
 

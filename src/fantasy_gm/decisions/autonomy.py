@@ -1,10 +1,12 @@
-"""Autonomy gate: decides how a decision is routed and whether it may be executed.
+"""Autonomy gate: routing at record time, authorisation immediately before execution.
 
-Pure functions. Two checkpoints:
-
-* ``route_decision`` -- at record time: record only / notify / request approval / execute.
-* ``authorize_execution`` -- immediately before calling a provider. Re-checks everything,
-  because policy, capabilities and time may all have changed since the decision was recorded.
+Autonomous execution fails closed. It requires ALL of:
+* a LIVE run (PAPER and REPLAY never execute);
+* the decision artifact (and its calibrator) VALIDATED for this decision type and regime --
+  descriptive confidence never authorises anything;
+* an action risk class at or below the policy's autonomous ceiling;
+* no insufficient-evidence flag; fresh enough information for this decision type and context;
+* the provider capability for the action; the global kill switch on.
 """
 
 from __future__ import annotations
@@ -12,13 +14,15 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from fantasy_gm.decisions.ledger import LedgerEntry
-from fantasy_gm.domain.actions import WaiverClaim
-from fantasy_gm.domain.autonomy import AutonomyMode, AutonomyPolicy
+from fantasy_gm.decisions.ledger import EXECUTABLE_STATUSES, LedgerEntry
+from fantasy_gm.domain.autonomy import AutonomyMode, AutonomyPolicy, FreshnessContext
 from fantasy_gm.domain.base import DomainModel
 from fantasy_gm.domain.capabilities import ProviderCapability
 from fantasy_gm.domain.decision import ActorKind, Decision, DecisionStatus
-from fantasy_gm.domain.league import League
+from fantasy_gm.domain.risk import RiskAssessment, assess_action_risk
+from fantasy_gm.domain.run_context import RunMode
+from fantasy_gm.domain.validation import ValidationState
+from fantasy_gm.models.registry import ModelRegistry, effective_validation_state
 
 _MODE_ORDER = [
     AutonomyMode.OBSERVE,
@@ -45,6 +49,8 @@ class RoutingDecision(DomainModel):
     effective_mode: AutonomyMode
     provider_can_execute: bool
     manual_action_required: bool
+    risk: RiskAssessment
+    validation_state: ValidationState
     reasons: tuple[str, ...] = ()
 
 
@@ -65,117 +71,119 @@ def _capability_gap(
 
 
 def _autonomy_blockers(
-    decision: Decision, policy: AutonomyPolicy, league: League | None
-) -> list[str]:
+    decision: Decision,
+    policy: AutonomyPolicy,
+    faab_budget: int | None,
+    models: ModelRegistry,
+    now: datetime,
+) -> tuple[list[str], RiskAssessment, ValidationState]:
     reasons: list[str] = []
+    state, v_reasons = effective_validation_state(
+        models, decision.decision_artifact_hash, decision.decision_type, decision.regime, now
+    )
+    if state is not ValidationState.VALIDATED:
+        reasons.extend(v_reasons or [f"decision model is {state}"])
+    risk = assess_action_risk(decision.selected.action, policy.risk, faab_budget)
+    if risk.risk_class.rank > policy.risk.max_autonomous_risk.rank:
+        reasons.append(
+            f"action risk {risk.risk_class} exceeds autonomous ceiling "
+            f"{policy.risk.max_autonomous_risk}"
+        )
     if decision.confidence.insufficient_evidence:
         reasons.append("decision flagged insufficient evidence")
-    if decision.confidence.score < policy.min_autonomous_confidence:
-        reasons.append(
-            f"confidence {decision.confidence.score:.2f} below autonomous threshold "
-            f"{policy.min_autonomous_confidence:.2f}"
-        )
-    action = decision.selected.action
-    if isinstance(action, WaiverClaim) and action.faab_bid:
-        budget = league.waivers.faab_budget if league else None
-        if budget is None:
-            reasons.append("FAAB bid without a known league FAAB budget")
-        elif action.faab_bid > policy.max_autonomous_faab_fraction * budget:
-            reasons.append(
-                f"FAAB bid {action.faab_bid} exceeds autonomous ceiling "
-                f"{policy.max_autonomous_faab_fraction:.0%} of {budget}"
-            )
-    return reasons
+    return reasons, risk, state
 
 
 def route_decision(
     decision: Decision,
     policy: AutonomyPolicy,
     capabilities: frozenset[ProviderCapability],
-    league: League | None = None,
+    models: ModelRegistry,
+    now: datetime,
+    faab_budget: int | None = None,
 ) -> RoutingDecision:
     if policy.league_id != decision.league_id:
         raise ValueError("policy belongs to a different league")
     mode = most_restrictive(decision.autonomy_mode, policy.mode_for(decision.decision_type))
     can_execute, cap_reasons = _capability_gap(decision, capabilities)
     is_action = decision.selected.action.required_capability is not None
+    blockers, risk, state = _autonomy_blockers(decision, policy, faab_budget, models, now)
 
-    if mode is AutonomyMode.OBSERVE:
+    def result(
+        routing: Routing, status: DecisionStatus, manual: bool, reasons: list[str]
+    ) -> RoutingDecision:
         return RoutingDecision(
-            routing=Routing.RECORD_ONLY,
-            initial_status=DecisionStatus.RECORDED,
+            routing=routing,
+            initial_status=status,
             effective_mode=mode,
             provider_can_execute=can_execute,
-            manual_action_required=False,
-            reasons=("observe mode",),
+            manual_action_required=manual,
+            risk=risk,
+            validation_state=state,
+            reasons=tuple(reasons),
         )
-    notify = RoutingDecision(
-        routing=Routing.NOTIFY,
-        initial_status=DecisionStatus.RECOMMENDED,
-        effective_mode=mode,
-        provider_can_execute=can_execute,
-        manual_action_required=is_action and not can_execute,
-        reasons=tuple(cap_reasons),
-    )
+
+    if decision.run.mode is not RunMode.LIVE:
+        return result(
+            Routing.RECORD_ONLY,
+            DecisionStatus.RECORDED,
+            False,
+            [f"{decision.run.mode} run: record only"],
+        )
+    if mode is AutonomyMode.OBSERVE:
+        return result(Routing.RECORD_ONLY, DecisionStatus.RECORDED, False, ["observe mode"])
     if mode is AutonomyMode.RECOMMEND or not can_execute:
-        return notify
+        return result(
+            Routing.NOTIFY, DecisionStatus.RECOMMENDED, is_action and not can_execute, cap_reasons
+        )
     if mode is AutonomyMode.APPROVAL_REQUIRED:
-        return RoutingDecision(
-            routing=Routing.REQUEST_APPROVAL,
-            initial_status=DecisionStatus.AWAITING_APPROVAL,
-            effective_mode=mode,
-            provider_can_execute=True,
-            manual_action_required=False,
-        )
-    blockers = _autonomy_blockers(decision, policy, league)
+        return result(Routing.REQUEST_APPROVAL, DecisionStatus.AWAITING_APPROVAL, False, [])
     if blockers:
-        return RoutingDecision(
-            routing=Routing.REQUEST_APPROVAL,
-            initial_status=DecisionStatus.AWAITING_APPROVAL,
-            effective_mode=mode,
-            provider_can_execute=True,
-            manual_action_required=False,
-            reasons=("autonomous execution downgraded to approval", *blockers),
+        return result(
+            Routing.REQUEST_APPROVAL,
+            DecisionStatus.AWAITING_APPROVAL,
+            False,
+            ["autonomous execution downgraded to approval", *blockers],
         )
-    return RoutingDecision(
-        routing=Routing.EXECUTE,
-        initial_status=DecisionStatus.APPROVED,
-        effective_mode=mode,
-        provider_can_execute=True,
-        manual_action_required=False,
-    )
+    return result(Routing.EXECUTE, DecisionStatus.APPROVED, False, [])
 
 
 def authorize_execution(
     entry: LedgerEntry,
     policy: AutonomyPolicy,
     capabilities: frozenset[ProviderCapability],
+    models: ModelRegistry,
     now: datetime,
     *,
     execution_enabled: bool,
-    league: League | None = None,
+    faab_budget: int | None = None,
+    freshness: FreshnessContext | None = None,
 ) -> ExecutionAuthorization:
-    decision = entry.decision
+    decision = entry.decision.value
     reasons: list[str] = []
     if not execution_enabled:
         reasons.append("global execution kill switch is off")
+    if decision.run.mode is not RunMode.LIVE:
+        reasons.append(f"{decision.run.mode} decisions are never executed")
     if policy.league_id != decision.league_id:
         reasons.append("policy belongs to a different league")
-    if entry.current_status not in (DecisionStatus.APPROVED, DecisionStatus.EXECUTION_FAILED):
-        reasons.append(f"decision status is {entry.current_status}, not approved")
+    if entry.current_status not in EXECUTABLE_STATUSES:
+        reasons.append(f"decision status is {entry.current_status}, not executable")
     mode = most_restrictive(decision.autonomy_mode, policy.mode_for(decision.decision_type))
     if mode in (AutonomyMode.OBSERVE, AutonomyMode.RECOMMEND):
         reasons.append(f"effective autonomy mode {mode} never executes")
     _, cap_reasons = _capability_gap(decision, capabilities)
     reasons.extend(cap_reasons)
-    if now - decision.information_cutoff > policy.max_decision_staleness:
+    limit = policy.freshness.limit(decision.decision_type, freshness or FreshnessContext())
+    age = now - decision.information_cutoff
+    if age > limit:
         reasons.append(
-            f"decision information is stale ({now - decision.information_cutoff} old, "
-            f"max {policy.max_decision_staleness})"
+            f"decision information is stale for {decision.decision_type} ({age} old, max {limit})"
         )
-    approvals = [e for e in entry.status_history if e.status is DecisionStatus.APPROVED]
+    approvals = [s for s in entry.statuses if s.status is DecisionStatus.APPROVED]
     if approvals and approvals[-1].actor.kind is ActorKind.POLICY:
         if mode is not AutonomyMode.AUTONOMOUS:
             reasons.append("policy approval is no longer valid: league is not autonomous")
-        reasons.extend(_autonomy_blockers(decision, policy, league))
+        blockers, _, _ = _autonomy_blockers(decision, policy, faab_budget, models, now)
+        reasons.extend(blockers)
     return ExecutionAuthorization(allowed=not reasons, reasons=tuple(reasons))

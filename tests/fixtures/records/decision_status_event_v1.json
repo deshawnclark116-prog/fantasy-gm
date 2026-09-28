@@ -1,0 +1,6 @@
+{
+  "payload": "{\"actor\":{\"actor_id\":\"system\",\"kind\":\"system\"},\"decision_id\":\"dec_f699d735697a4d8aab3afb4456efcf8d\",\"event_id\":\"dse_e803d54f9526474d82f229ceda62b8e2\",\"execution_result\":null,\"occurred_at\":\"2025-09-07T12:00:00Z\",\"reason\":\"\",\"status\":\"recorded\"}",
+  "payload_hash": "6e9c61f3fe93ea886c826cd7c12fd7ca2a7c3ea59fcded42351740a5e2bf526f",
+  "record_type": "decision_status_event",
+  "schema_version": 1
+}

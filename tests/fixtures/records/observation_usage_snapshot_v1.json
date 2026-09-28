@@ -1,0 +1,6 @@
+{
+  "payload": "{\"effective_at\":\"2025-09-08T12:00:00Z\",\"game_id\":\"gam_2835d37d932d49dca1250593d5bd56a8\",\"metrics\":{\"routes\":30.0,\"team_dropbacks\":40.0},\"observation_id\":\"obs_9a6081659a024f7d941ac724dc3c3c22\",\"observed_at\":\"2025-09-09T00:00:00Z\",\"phase\":\"regular\",\"player_id\":\"plr_dcaec36395d5407d80d967b4b3af2c87\",\"season\":2025,\"source\":{\"identity_basis\":[],\"ingested_at\":\"2025-09-09T00:00:00Z\",\"provider\":\"test_feed\",\"provider_record_id\":null,\"raw_timestamp\":null,\"raw_timestamp_field\":null,\"timestamp_quality\":\"exact_publication_time\"},\"team_id\":\"nfl_b919d606b5f340189e4926d47959bc0d\",\"week\":1}",
+  "payload_hash": "8d9ef426e33c408afb78e324d343a07e05509582e53d16541ba8b3c57ff54b69",
+  "record_type": "observation:usage_snapshot",
+  "schema_version": 1
+}

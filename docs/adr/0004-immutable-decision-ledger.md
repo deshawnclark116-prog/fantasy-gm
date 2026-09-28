@@ -1,6 +1,6 @@
 # ADR 0004 — Immutable decision ledger with separate lifecycle, outcome and grade records
 
-**Status:** accepted
+**Status:** accepted; amended by ADR 0008 (ledger-stamped recorded_at), ADR 0009 (versioned records), ADR 0012 (execution attempts, concurrency) and ADR 0013 (observed vs counterfactual).
 
 ## Context
 Decisions must be graded later without the grade, the outcome, or later status changes being

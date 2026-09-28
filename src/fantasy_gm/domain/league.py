@@ -246,24 +246,105 @@ class PlayoffSettings(DomainModel):
 
 
 class League(DomainModel):
+    """Stable league identity only. Everything a commissioner or the platform can change during
+    a season (scoring, rosters, waivers, schedule/playoffs, draft, eligibility) is a temporal
+    observation, reconstructed as of a cutoff by ``fantasy_gm.leagues.state``."""
+
     league_id: LeagueId
     name: str
     season: int
     num_teams: int = Field(ge=2)
+    managed_team_id: FantasyTeamId | None = None
+
+
+class SeasonSettings(DomainModel):
+    playoffs: PlayoffSettings
+    lineup_lock: LineupLock
+    trade_deadline_week: int | None = Field(default=None, ge=1, le=25)
+
+
+class LeagueRules(DomainModel):
+    """The complete rule set in force at one point in time (derived, never stored as truth)."""
+
     scoring: ScoringRules
     roster_rules: RosterRules
     draft: DraftSettings
     waivers: WaiverSettings
-    playoffs: PlayoffSettings
-    lineup_lock: LineupLock
-    trade_deadline_week: int | None = Field(default=None, ge=1, le=25)
-    managed_team_id: FantasyTeamId | None = None
+    season_settings: SeasonSettings
 
-    @model_validator(mode="after")
-    def _playoff_teams(self) -> Self:
-        if self.playoffs.playoff_teams > self.num_teams:
-            raise ValueError("playoff_teams cannot exceed num_teams")
-        return self
+
+# --------------------------------------------------------------------------- temporal league facts
+
+
+class _LeagueObservation(Observation):
+    league_id: LeagueId
+
+    def subject_league_id(self) -> LeagueId:
+        return self.league_id
+
+
+class LeagueScoringSettings(_LeagueObservation):
+    kind: ClassVar[str] = "league_scoring_settings"
+    scoring: ScoringRules
+
+    def fact_key(self) -> str:
+        return f"league_scoring:{self.league_id}:{self.effective_at.isoformat()}"
+
+
+class LeagueRosterSettings(_LeagueObservation):
+    kind: ClassVar[str] = "league_roster_settings"
+    roster_rules: RosterRules
+
+    def fact_key(self) -> str:
+        return f"league_roster:{self.league_id}:{self.effective_at.isoformat()}"
+
+
+class LeagueWaiverSettings(_LeagueObservation):
+    kind: ClassVar[str] = "league_waiver_settings"
+    waivers: WaiverSettings
+
+    def fact_key(self) -> str:
+        return f"league_waivers:{self.league_id}:{self.effective_at.isoformat()}"
+
+
+class LeagueSeasonSettings(_LeagueObservation):
+    kind: ClassVar[str] = "league_season_settings"
+    settings: SeasonSettings
+
+    def fact_key(self) -> str:
+        return f"league_season:{self.league_id}:{self.effective_at.isoformat()}"
+
+
+class LeagueDraftSettings(_LeagueObservation):
+    kind: ClassVar[str] = "league_draft_settings"
+    draft: DraftSettings
+
+    def fact_key(self) -> str:
+        return f"league_draft:{self.league_id}:{self.effective_at.isoformat()}"
+
+
+class WaiverBudgetState(_LeagueObservation):
+    kind: ClassVar[str] = "waiver_budget_state"
+    team_id: FantasyTeamId
+    faab_remaining: int | None = Field(default=None, ge=0)
+    waiver_priority: int | None = Field(default=None, ge=1)
+
+    def fact_key(self) -> str:
+        return f"waiver_state:{self.league_id}:{self.team_id}:{self.effective_at.isoformat()}"
+
+
+class PlatformEligibility(_LeagueObservation):
+    """Positions the league's platform lets this player fill (may differ from NFL position)."""
+
+    kind: ClassVar[str] = "platform_eligibility"
+    player_id: PlayerId
+    positions: frozenset[Position] = Field(min_length=1)
+
+    def fact_key(self) -> str:
+        return f"eligibility:{self.league_id}:{self.player_id}:{self.effective_at.isoformat()}"
+
+    def subject_player_id(self) -> PlayerId:
+        return self.player_id
 
 
 class FantasyTeam(DomainModel):
@@ -277,11 +358,10 @@ class RosterEntry(DomainModel):
     slot_label: str
 
 
-class FantasyRoster(Observation):
+class FantasyRoster(_LeagueObservation):
     """A fantasy team's roster + lineup as observed from the league platform."""
 
     kind: ClassVar[str] = "fantasy_roster"
-    league_id: LeagueId
     team_id: FantasyTeamId
     week: int | None = Field(default=None, ge=0, le=25)
     entries: tuple[RosterEntry, ...]
@@ -310,3 +390,13 @@ class DraftPick(DomainModel):
         if (self.selected_player_id is None) != (self.selected_at is None):
             raise ValueError("selected_player_id and selected_at must be set together")
         return self
+
+
+class DraftBoardState(_LeagueObservation):
+    """Full draft order/board (made and pending picks) as of ``effective_at``."""
+
+    kind: ClassVar[str] = "draft_board_state"
+    picks: tuple[DraftPick, ...]
+
+    def fact_key(self) -> str:
+        return f"draft_board:{self.league_id}:{self.effective_at.isoformat()}"

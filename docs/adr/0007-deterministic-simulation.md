@@ -1,6 +1,6 @@
 # ADR 0007 — Deterministic, label-keyed simulation seeding
 
-**Status:** accepted
+**Status:** accepted; amended by ADR 0015 (reproducibility envelope, lockfile, off-loop execution).
 
 ## Decision
 * `SeedSpec(root_seed, path: tuple[str, ...])` is plain, storeable data (it can sit on a

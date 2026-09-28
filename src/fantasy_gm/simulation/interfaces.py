@@ -14,20 +14,29 @@ from numpy.typing import NDArray
 from pydantic import Field
 
 from fantasy_gm.domain.actions import Action
+from fantasy_gm.domain.artifacts import RuntimeFingerprint
 from fantasy_gm.domain.base import DomainModel
 from fantasy_gm.domain.ids import CandidateId, FantasyTeamId, LeagueId, PlayerId
-from fantasy_gm.domain.league import DraftPick, League
+from fantasy_gm.domain.league import DraftPick, League, LeagueRules
 from fantasy_gm.domain.seeds import SeedSpec
 from fantasy_gm.simulation.distributions import PlayerWeekDistribution
 
 
-class SimulationRunRecord(DomainModel):
+class ReproducibilityEnvelope(DomainModel):
+    """Everything needed to identify (and, in a pinned environment, re-run) a simulation.
+
+    Bit-for-bit reproduction is only claimed when ``runtime`` (commit, Python, numpy, lockfile
+    hash) matches; across arbitrary future library versions it is not promised.
+    """
+
+    runtime: RuntimeFingerprint
     simulator: str
     simulator_version: str
+    config_hash: str
     seed: SeedSpec
     n_sims: int
     request_hash: str
-    numpy_version: str
+    model_artifact_hashes: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------- weekly outcomes
@@ -41,7 +50,7 @@ class WeeklyOutcomeRequest(DomainModel):
 
 @dataclass(frozen=True)
 class WeeklyOutcomeResult:
-    run: SimulationRunRecord
+    run: ReproducibilityEnvelope
     samples: dict[PlayerId, NDArray[np.float64]]  # player -> (n_sims,) read-only array
 
 
@@ -62,7 +71,7 @@ class MatchupRequest(DomainModel):
 
 
 class MatchupResult(DomainModel):
-    run: SimulationRunRecord
+    run: ReproducibilityEnvelope
     p_home_win: float
     p_away_win: float
     p_tie: float
@@ -94,6 +103,7 @@ class TeamRecord(DomainModel):
 
 class RemainingSeasonRequest(DomainModel):
     league: League
+    rules: LeagueRules  # the rules in force at the simulation's cutoff
     current_week: int
     standings: tuple[TeamRecord, ...]
     remaining_schedule: tuple[ScheduledMatchup, ...]
@@ -104,7 +114,7 @@ class RemainingSeasonRequest(DomainModel):
 
 
 class RemainingSeasonResult(DomainModel):
-    run: SimulationRunRecord
+    run: ReproducibilityEnvelope
     p_playoffs: dict[FantasyTeamId, float]
     p_championship: dict[FantasyTeamId, float]
     expected_wins: dict[FantasyTeamId, float]
@@ -136,7 +146,7 @@ class DraftContinuationRequest(DomainModel):
 
 
 class DraftContinuationResult(DomainModel):
-    run: SimulationRunRecord
+    run: ReproducibilityEnvelope
     # candidate -> quantiles of the finished-roster objective (e.g. championship equity)
     candidate_objective_quantiles: dict[CandidateId, dict[float, float]]
     candidate_objective_mean: dict[CandidateId, float]

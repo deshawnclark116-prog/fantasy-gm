@@ -141,21 +141,26 @@ def test_preseason_total_snaps_not_used_as_proxy() -> None:
         phase=SeasonPhase.PRESEASON,
         extra={UsageMetric.OFFENSE_SNAPS: 50, UsageMetric.TEAM_OFFENSE_SNAPS: 60},
     )
-    res = c.preseason_deployment([pre], 2025, team, CFG)
-    assert res.score is None and "starters" in res.notes[0]
+    res = c.preseason_deployment([pre], [], None, 2025, team, CFG)
+    assert res.score is None and any("starters" in n for n in res.notes)
 
 
 def test_usage_other_team_excluded_and_fallback_quality() -> None:
     p, team = make_player(), team_id()
     elsewhere = wr_usage(p, team_id(), 1, routes=40)
-    res, n_eff = c.actual_usage([elsewhere], Position.WR, 2025, team, None, CFG)
+    res, n_eff = c.actual_usage(
+        [elsewhere], p.player_id, Position.WR, 2025, team, ts(days=60), None, CFG
+    )
     assert res.score is None and n_eff == 0
     snaps_only = wr_usage(p, team, 2, routes=0).model_copy(
         update={"metrics": {UsageMetric.OFFENSE_SNAPS: 30, UsageMetric.TEAM_OFFENSE_SNAPS: 60}}
     )
-    res, n_eff = c.actual_usage([snaps_only], Position.WR, 2025, team, None, CFG)
+    res, n_eff = c.actual_usage(
+        [snaps_only], p.player_id, Position.WR, 2025, team, ts(days=60), None, CFG
+    )
     assert n_eff == pytest.approx(CFG.usage_fallback_quality)
-    assert any("snap share" in n for n in res.notes)
+    assert any("fell back to rec_snap_share" in n for n in res.notes)
+    assert res.method.endswith("rec_snap_share")
 
 
 def test_engine_refuses_leaked_inputs() -> None:

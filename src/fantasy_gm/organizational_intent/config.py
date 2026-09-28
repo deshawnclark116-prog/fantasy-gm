@@ -12,7 +12,8 @@ from typing import Literal
 from pydantic import Field
 
 from fantasy_gm.domain.base import DomainModel
-from fantasy_gm.domain.nfl import DepthChartSource, Position
+from fantasy_gm.domain.nfl import ContextSourceKind, DepthChartSource, Position
+from fantasy_gm.domain.roles import RoleDimension
 
 
 def _primary_roles() -> dict[Position, int]:
@@ -28,10 +29,40 @@ def _depth_reliability() -> dict[DepthChartSource, float]:
     }
 
 
-def _full_role_reference() -> dict[Position, float]:
-    # Usage share at which a player is treated as holding a full organizational role.
-    # QB: dropback share; RB: (carries+targets) share; WR/TE: route participation.
-    return {Position.QB: 0.9, Position.RB: 0.55, Position.WR: 0.85, Position.TE: 0.75}
+def _deployment_dimensions() -> dict[Position, tuple[RoleDimension, ...]]:
+    # Deployment dimensions (organisation's choice) in preference order; later entries are
+    # lower-quality fallbacks. Target-earning dimensions are deliberately NOT here.
+    return {
+        Position.QB: (RoleDimension.QB_DROPBACK_SHARE,),
+        Position.RB: (RoleDimension.RB_SNAP_SHARE,),
+        Position.WR: (RoleDimension.REC_ROUTE_PARTICIPATION, RoleDimension.REC_SNAP_SHARE),
+        Position.TE: (RoleDimension.REC_ROUTE_PARTICIPATION, RoleDimension.REC_SNAP_SHARE),
+    }
+
+
+def _full_role_reference() -> dict[Position, dict[RoleDimension, float]]:
+    # Value of a deployment dimension at which a player is treated as holding a full role.
+    return {
+        Position.QB: {RoleDimension.QB_DROPBACK_SHARE: 0.9},
+        Position.RB: {RoleDimension.RB_SNAP_SHARE: 0.65},
+        Position.WR: {
+            RoleDimension.REC_ROUTE_PARTICIPATION: 0.85,
+            RoleDimension.REC_SNAP_SHARE: 0.85,
+        },
+        Position.TE: {
+            RoleDimension.REC_ROUTE_PARTICIPATION: 0.75,
+            RoleDimension.REC_SNAP_SHARE: 0.80,
+        },
+    }
+
+
+def _context_reliability() -> dict[ContextSourceKind, float]:
+    return {
+        ContextSourceKind.OFFICIAL_PARTICIPATION: 1.0,
+        ContextSourceKind.CHARTING_PROVIDER: 0.8,
+        ContextSourceKind.BEAT_REPORT: 0.6,
+        ContextSourceKind.INFERRED: 0.4,
+    }
 
 
 class IntentConfigV0(DomainModel):
@@ -66,13 +97,23 @@ class IntentConfigV0(DomainModel):
     # Preseason deployment
     preseason_first_team_confidence: float = Field(default=0.6, ge=0, le=1)
     preseason_full_confidence_games: int = Field(default=3, ge=1)
+    preseason_context_reliability: dict[ContextSourceKind, float] = Field(
+        default_factory=_context_reliability
+    )
+    preseason_unknown_context_factor: float = Field(default=0.5, ge=0, le=1)
+    preseason_unknown_experience_factor: float = Field(default=0.7, ge=0, le=1)
 
     # Actual NFL usage
     usage_max_games: int = Field(default=17, ge=1)
     usage_recency_half_life_games: float = Field(default=4.0, gt=0)
     usage_prior_season_discount: float = Field(default=0.5, ge=0, le=1)
     usage_fallback_quality: float = Field(default=0.6, ge=0, le=1)
-    usage_full_role_reference: dict[Position, float] = Field(default_factory=_full_role_reference)
+    usage_deployment_dimensions: dict[Position, tuple[RoleDimension, ...]] = Field(
+        default_factory=_deployment_dimensions
+    )
+    usage_full_role_reference: dict[Position, dict[RoleDimension, float]] = Field(
+        default_factory=_full_role_reference
+    )
 
     # Prior vs evidence balance: usage_weight = n_eff / (n_eff + prior_pseudo_games)
     prior_pseudo_games: float = Field(default=4.0, gt=0)

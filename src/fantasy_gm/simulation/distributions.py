@@ -54,6 +54,7 @@ class PlayerWeekDistribution(DomainModel):
     p_active: float = Field(ge=0.0, le=1.0)
     conditional: ConditionalDistribution
     source_model: str = Field(min_length=1)  # which upstream model produced this
+    source_artifact_hash: str | None = None  # its ModelArtifactManifest hash, when one exists
 
     def sample(self, rng: np.random.Generator, n: int) -> NDArray[np.float64]:
         active = rng.random(n) < self.p_active

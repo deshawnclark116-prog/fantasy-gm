@@ -1,6 +1,6 @@
 # ADR 0003 — Stable internal IDs with provider-ID mapping
 
-**Status:** accepted
+**Status:** accepted; the one-shot mapping model is superseded by ADR 0014 (correctable identity). Internal-ID principles unchanged.
 
 ## Decision
 * Internal IDs are random, prefixed (`plr_`, `nfl_`, `gam_`, `lg_`, `dec_` ...) and minted once.

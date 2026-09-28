@@ -1,6 +1,6 @@
 # ADR 0002 — Bitemporal, append-only observations and explicit knowledge cutoffs
 
-**Status:** accepted
+**Status:** accepted; amended by ADR 0010 (timestamp trust, physical storage bound) and ADR 0011 (reads only via knowledge sessions).
 
 ## Context
 Principles 9 and 10 require every decision to be reconstructable using only information that

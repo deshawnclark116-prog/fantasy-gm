@@ -22,7 +22,9 @@ postgres = ["psycopg[binary]>=3.2"]
 dev = [
     "httpx>=0.27",
     "mypy>=1.11",
+    "psycopg[binary]>=3.2",
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
 
@@ -33,8 +35,14 @@ packages = ["src/fantasy_gm"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
-    "acceptance: Foundation v0.1 acceptance criteria",
+    "acceptance: Foundation acceptance criteria",
+    "postgres: requires a real PostgreSQL server (FANTASY_GM_TEST_POSTGRES_URL)",
+]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.ruff]

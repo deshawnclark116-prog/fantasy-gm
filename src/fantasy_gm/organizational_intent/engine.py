@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from fantasy_gm.domain.artifacts import FitKind, ModelArtifactManifest
 from fantasy_gm.domain.knowledge import LeakageError, assert_known
 from fantasy_gm.organizational_intent import components as c
 from fantasy_gm.organizational_intent.config import IntentConfigV0
@@ -17,9 +18,23 @@ from fantasy_gm.organizational_intent.snapshot import (
     IntentComponent,
     IntentConflict,
     OrganizationalIntentSnapshot,
+    informed_dimensions,
 )
 
-ENGINE_VERSION = "org_intent_v0"
+ENGINE_VERSION = "org_intent_v0.1"
+
+
+def intent_artifact(config: IntentConfigV0, created_at: datetime) -> ModelArtifactManifest:
+    """The v0 engine is a hand-specified heuristic: it has no training window, and its
+    artifact records the exact config hash so every snapshot is attributable."""
+    return ModelArtifactManifest(
+        name="organizational_intent",
+        version=ENGINE_VERSION,
+        fit_kind=FitKind.HAND_SPECIFIED,
+        config_hash=config.content_hash(),
+        created_at=created_at,
+        notes="unvalidated hand-specified heuristics; see IntentConfigV0",
+    )
 
 
 def compute_intent_snapshot(
@@ -40,7 +55,14 @@ def compute_intent_snapshot(
     coaching = c.coaching_continuity(inputs.coaching, inputs.team_id, as_of, cfg)
     regime_start = coaching.regime_start
     usage_result, n_eff = c.actual_usage(
-        inputs.usage, inputs.position, inputs.season, inputs.team_id, regime_start, cfg
+        inputs.usage,
+        inputs.player.player_id,
+        inputs.position,
+        inputs.season,
+        inputs.team_id,
+        as_of,
+        regime_start,
+        cfg,
     )
     results: dict[IntentComponent, c.ComponentResult] = {
         IntentComponent.DRAFT_INVESTMENT: c.draft_investment(
@@ -71,7 +93,12 @@ def compute_intent_snapshot(
         ),
         IntentComponent.COACHING_CONTINUITY: coaching.component,
         IntentComponent.PRESEASON_DEPLOYMENT: c.preseason_deployment(
-            inputs.usage, inputs.season, inputs.team_id, cfg
+            inputs.usage,
+            inputs.preseason_contexts,
+            inputs.draft,
+            inputs.season,
+            inputs.team_id,
+            cfg,
         ),
         IntentComponent.ACTUAL_USAGE: usage_result,
     }
@@ -85,6 +112,7 @@ def compute_intent_snapshot(
             confidence=res.confidence if res.score is not None else 0.0,
             influence=influences.get(comp, 0.0),
             method=res.method,
+            informs=informed_dimensions(comp, inputs.position),
             measurements=res.measurements,
             provenance=res.provenance,
             notes=res.notes,

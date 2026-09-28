@@ -2,7 +2,8 @@
 
 Independence is a known simplification (real outcomes correlate: QB/WR stacks, game script,
 shared weather). It is recorded as ``simulator_version`` so later correlated simulators are
-distinguishable in the ledger.
+distinguishable in the ledger. These are CPU-bound: call them from async code only through
+``fantasy_gm.simulation.offload``.
 """
 
 from __future__ import annotations
@@ -10,19 +11,22 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from fantasy_gm.domain.base import sha256_hex
 from fantasy_gm.domain.ids import PlayerId
 from fantasy_gm.domain.seeds import SeedSpec
+from fantasy_gm.runtime import runtime_fingerprint
 from fantasy_gm.simulation.distributions import PlayerWeekDistribution
 from fantasy_gm.simulation.interfaces import (
     MatchupRequest,
     MatchupResult,
-    SimulationRunRecord,
+    ReproducibilityEnvelope,
     WeeklyOutcomeRequest,
     WeeklyOutcomeResult,
 )
-from fantasy_gm.simulation.rng import NUMPY_VERSION, generator_for
+from fantasy_gm.simulation.rng import generator_for
 
 _QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
+_NO_CONFIG_HASH = sha256_hex("{}")  # reference simulators have no tunable configuration
 
 
 def _sample_players(
@@ -39,51 +43,58 @@ def _sample_players(
     return out
 
 
+def _artifacts(*lineups: tuple[PlayerWeekDistribution, ...]) -> tuple[str, ...]:
+    return tuple(
+        sorted({d.source_artifact_hash for lu in lineups for d in lu if d.source_artifact_hash})
+    )
+
+
 class IndependentWeeklyOutcomeSimulator:
     name = "independent_weekly_outcome"
-    version = "0.1.0"
+    version = "0.1.1"
 
     def simulate(self, request: WeeklyOutcomeRequest) -> WeeklyOutcomeResult:
         ids = [d.player_id for d in request.distributions]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate player in request")
-        samples = _sample_players(request.distributions, request.n_sims, request.seed)
         return WeeklyOutcomeResult(
-            run=SimulationRunRecord(
+            run=ReproducibilityEnvelope(
+                runtime=runtime_fingerprint(),
                 simulator=self.name,
                 simulator_version=self.version,
+                config_hash=_NO_CONFIG_HASH,
                 seed=request.seed,
                 n_sims=request.n_sims,
                 request_hash=request.content_hash(),
-                numpy_version=NUMPY_VERSION,
+                model_artifact_hashes=_artifacts(request.distributions),
             ),
-            samples=samples,
+            samples=_sample_players(request.distributions, request.n_sims, request.seed),
         )
 
 
 class IndependentMatchupSimulator:
     name = "independent_matchup"
-    version = "0.1.0"
+    version = "0.1.1"
 
     def simulate(self, request: MatchupRequest) -> MatchupResult:
         home_ids = {d.player_id for d in request.home_lineup}
         if home_ids & {d.player_id for d in request.away_lineup}:
             raise ValueError("a player cannot appear in both lineups")
-        # Players share the same per-player stream regardless of side (true to reality: a
-        # player's outcome does not depend on which fantasy team rosters him).
         home = _sample_players(request.home_lineup, request.n_sims, request.seed)
         away = _sample_players(request.away_lineup, request.n_sims, request.seed)
         home_total = np.sum(np.stack(list(home.values())), axis=0)
         away_total = np.sum(np.stack(list(away.values())), axis=0)
         margin = home_total - away_total
         return MatchupResult(
-            run=SimulationRunRecord(
+            run=ReproducibilityEnvelope(
+                runtime=runtime_fingerprint(),
                 simulator=self.name,
                 simulator_version=self.version,
+                config_hash=_NO_CONFIG_HASH,
                 seed=request.seed,
                 n_sims=request.n_sims,
                 request_hash=request.content_hash(),
-                numpy_version=NUMPY_VERSION,
+                model_artifact_hashes=_artifacts(request.home_lineup, request.away_lineup),
             ),
             p_home_win=float(np.mean(margin > 0)),
             p_away_win=float(np.mean(margin < 0)),
